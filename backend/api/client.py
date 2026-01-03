@@ -12,16 +12,21 @@ import asyncio
 import aiohttp
 import hashlib
 import json
+import os
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configuration
-
-USER_AGENT = "WM-Business-MajorAdvising/1.0 (Course Catalog Sync; Contact: jmlenhard@wm.edu)"
+CONTACT_EMAIL = os.getenv("CONTACT_EMAIL", "admin@example.com")
+USER_AGENT = f"WM-Business-MajorAdvising/1.0 (Course Catalog Sync; Contact: {CONTACT_EMAIL})"
 
 API_BASE = "https://registration.wm.edu/api/"
 SEARCH_ENDPOINT = f"{API_BASE}?page=fose&route=search"
