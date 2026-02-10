@@ -15,13 +15,23 @@ import argparse
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from core.config import initialize_firebase, get_firestore_client
 from core.semester import SemesterManager
+from core.auth import (
+    AuthenticatedUser,
+    get_current_user,
+    get_current_advisor,
+    verify_user_access
+)
 from services.firebase import get_course_service
+from services.student import get_student_service
+from services.advisor import get_advisor_service
+from services.prerequisites import get_prerequisite_engine
+from services.chat import get_chat_service
 
 
 # Pydantic Models (API Response Schemas)
@@ -84,6 +94,231 @@ class CacheStatsResponse(BaseModel):
     subject_keys: int = 0
     search_keys: int = 0
     total_keys: int = 0
+
+
+# Student Profile Models
+
+class StudentProfile(BaseModel):
+    id: Optional[str] = None
+    userId: str
+    name: str
+    email: str
+    classYear: int  # Required - graduation year
+    gpa: Optional[float] = None  # Null allowed for first semester freshmen
+    creditsEarned: int = 0
+    declared: bool = False  # False until intendedMajor is declared
+    intendedMajor: Optional[str] = None  # Null until declared
+    apCredits: Optional[int] = None  # Null if no AP credits
+    holds: List[str] = []
+
+
+class StudentProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    classYear: Optional[int] = None
+    gpa: Optional[float] = None
+    creditsEarned: Optional[int] = None
+    intendedMajor: Optional[str] = None
+    apCredits: Optional[int] = None
+    holds: Optional[List[str]] = None
+
+
+class DeclareMajorRequest(BaseModel):
+    major: str
+
+
+class EnrollmentRecord(BaseModel):
+    id: Optional[str] = None
+    studentId: str
+    courseCode: str
+    term: str
+    grade: Optional[str] = None
+    status: str = "planned"
+    credits: int = 3
+
+
+class EnrollmentCreate(BaseModel):
+    courseCode: str
+    term: str
+    grade: Optional[str] = None
+    status: str = "planned"
+    credits: int = 3
+
+
+class EnrollmentUpdate(BaseModel):
+    grade: Optional[str] = None
+    status: Optional[str] = None
+
+
+class StudentCoursesResponse(BaseModel):
+    completed: List[EnrollmentRecord]
+    current: List[EnrollmentRecord]
+    planned: List[EnrollmentRecord]
+
+
+class Milestone(BaseModel):
+    id: str
+    title: str
+    description: str
+    deadline: Optional[str] = None
+    completionCriteria: Optional[str] = None
+    completed: bool = False
+    completedAt: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class MilestoneProgressUpdate(BaseModel):
+    completed: bool
+    notes: Optional[str] = None
+
+
+# Advisor Portal Models
+
+class AdvisorAssignment(BaseModel):
+    id: Optional[str] = None
+    advisorId: str
+    studentId: str
+    assignedDate: str
+    student: Optional[StudentProfile] = None
+
+
+class AdviseeResponse(BaseModel):
+    id: str
+    userId: str
+    name: str
+    email: str
+    classYear: int
+    gpa: Optional[float] = None
+    creditsEarned: int = 0
+    declared: bool = False
+    intendedMajor: Optional[str] = None
+    assignmentId: Optional[str] = None
+    assignedDate: Optional[str] = None
+
+
+class AdvisorNote(BaseModel):
+    id: Optional[str] = None
+    studentId: str
+    advisorId: str
+    note: str
+    visibility: str = "private"
+    createdAt: Optional[str] = None
+    updatedAt: Optional[str] = None
+
+
+class NoteCreate(BaseModel):
+    note: str
+    visibility: str = "private"
+
+
+class NoteUpdate(BaseModel):
+    note: Optional[str] = None
+    visibility: Optional[str] = None
+
+
+class AdvisorAlert(BaseModel):
+    type: str
+    severity: str
+    studentId: str
+    studentName: str
+    message: str
+    createdAt: str
+
+
+class AssignAdviseeRequest(BaseModel):
+    studentId: str
+
+
+# Schedule Validation Models
+
+class ValidateScheduleRequest(BaseModel):
+    studentId: str
+    proposedCourses: List[str]
+
+
+class RiskFlagResponse(BaseModel):
+    type: str
+    severity: str
+    message: str
+    course_code: Optional[str] = None
+    details: dict = {}
+
+
+class ScheduleScoreResponse(BaseModel):
+    overall: int
+    workload: int
+    prerequisite_alignment: int
+    balance: int
+    recommendations: List[str] = []
+
+
+class CourseValidationDetail(BaseModel):
+    code: str
+    name: str
+    credits: float
+    prerequisites: List[str] = []
+    prerequisites_met: bool
+    missing_prerequisites: List[str] = []
+
+
+class ValidateScheduleResponse(BaseModel):
+    valid: bool
+    warnings: List[str] = []
+    errors: List[str] = []
+    missingPrereqs: dict = {}
+    riskFlags: List[RiskFlagResponse] = []
+    scheduleScore: ScheduleScoreResponse
+    totalCredits: int
+    courseDetails: List[CourseValidationDetail] = []
+
+
+class PrerequisiteInfoResponse(BaseModel):
+    course_code: str
+    course_name: str
+    credits: float
+    prerequisites: List[str] = []
+    semester_offered: str
+
+
+class EligibleCourseResponse(BaseModel):
+    code: str
+    name: str
+    credits: float
+    semester_offered: str
+    prerequisites: List[str] = []
+
+
+# Chat Models
+
+class ChatMessageRequest(BaseModel):
+    studentId: str
+    message: str
+    chatHistory: List[dict] = []
+
+
+class ChatCitation(BaseModel):
+    source: str
+    excerpt: str
+    relevance: float = 0.8
+
+
+class ChatRiskFlag(BaseModel):
+    type: str
+    severity: str
+    message: str
+
+
+class ChatNextStep(BaseModel):
+    action: str
+    priority: str
+    deadline: Optional[str] = None
+
+
+class ChatMessageResponse(BaseModel):
+    content: str
+    citations: List[ChatCitation] = []
+    risks: List[ChatRiskFlag] = []
+    nextSteps: List[ChatNextStep] = []
 
 
 # Background Scheduler
@@ -344,6 +579,636 @@ async def clear_cache():
     service = get_course_service()
     success = service.clear_cache()
     return {"success": success, "message": "Cache cleared" if success else "Cache not available"}
+
+
+# --- Student Profile Endpoints ---
+
+@app.get("/api/student/{user_id}/profile", response_model=StudentProfile)
+async def get_student_profile(
+    user_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Get a student's profile."""
+    # Verify access (user can view their own profile, or advisor/admin can view any)
+    if not verify_user_access(current_user, user_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_student_service()
+    student = service.get_student(user_id)
+
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    return StudentProfile(**student)
+
+
+@app.post("/api/student/{user_id}/profile", response_model=StudentProfile)
+async def create_student_profile(
+    user_id: str,
+    profile: StudentProfileUpdate,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Create a new student profile."""
+    # Users can only create their own profile
+    if current_user.uid != user_id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Can only create your own profile")
+
+    service = get_student_service()
+
+    existing = service.get_student(user_id)
+    if existing:
+        raise HTTPException(status_code=409, detail="Student profile already exists")
+
+    data = profile.model_dump(exclude_none=True)
+    data["userId"] = user_id
+
+    student = service.create_student(user_id, data)
+    return StudentProfile(**student)
+
+
+@app.put("/api/student/{user_id}/profile", response_model=StudentProfile)
+async def update_student_profile(
+    user_id: str,
+    profile: StudentProfileUpdate,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Update an existing student profile."""
+    # Verify access
+    if not verify_user_access(current_user, user_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_student_service()
+
+    updated = service.update_student(user_id, profile.model_dump(exclude_none=True))
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    return StudentProfile(**updated)
+
+
+@app.post("/api/student/{user_id}/declare-major", response_model=StudentProfile)
+async def declare_major(
+    user_id: str,
+    request: DeclareMajorRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Declare or update a student's major."""
+    # Verify access
+    if not verify_user_access(current_user, user_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_student_service()
+
+    updated = service.declare_major(user_id, request.major)
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    return StudentProfile(**updated)
+
+
+# --- Student Courses/Enrollments Endpoints ---
+
+@app.get("/api/student/{user_id}/courses", response_model=StudentCoursesResponse)
+async def get_student_courses(
+    user_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Get a student's courses (completed, current, planned)."""
+    # Verify access
+    if not verify_user_access(current_user, user_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_student_service()
+
+    student = service.get_student(user_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    courses = service.get_student_courses(user_id)
+
+    return StudentCoursesResponse(
+        completed=[EnrollmentRecord(**e) for e in courses["completed"]],
+        current=[EnrollmentRecord(**e) for e in courses["current"]],
+        planned=[EnrollmentRecord(**e) for e in courses["planned"]]
+    )
+
+
+@app.post("/api/student/{user_id}/courses", response_model=EnrollmentRecord)
+async def add_student_enrollment(
+    user_id: str,
+    enrollment: EnrollmentCreate,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Add a course enrollment for a student."""
+    # Verify access
+    if not verify_user_access(current_user, user_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_student_service()
+
+    student = service.get_student(user_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    data = enrollment.model_dump()
+    result = service.add_enrollment(user_id, data)
+
+    return EnrollmentRecord(**result)
+
+
+@app.put("/api/student/{user_id}/courses/{enrollment_id}", response_model=EnrollmentRecord)
+async def update_student_enrollment(
+    user_id: str,
+    enrollment_id: str,
+    enrollment: EnrollmentUpdate,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Update a course enrollment."""
+    # Verify access
+    if not verify_user_access(current_user, user_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_student_service()
+
+    updated = service.update_enrollment(enrollment_id, enrollment.model_dump(exclude_none=True))
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Enrollment not found")
+
+    return EnrollmentRecord(**updated)
+
+
+@app.delete("/api/student/{user_id}/courses/{enrollment_id}")
+async def delete_student_enrollment(
+    user_id: str,
+    enrollment_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Delete a course enrollment."""
+    # Verify access
+    if not verify_user_access(current_user, user_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_student_service()
+
+    success = service.delete_enrollment(enrollment_id)
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Enrollment not found")
+
+    return {"success": True, "message": "Enrollment deleted"}
+
+
+# --- Milestone Endpoints ---
+
+@app.get("/api/student/{user_id}/milestones", response_model=List[Milestone])
+async def get_student_milestones(
+    user_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Get degree progress milestones for a student."""
+    # Verify access
+    if not verify_user_access(current_user, user_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_student_service()
+
+    student = service.get_student(user_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    milestones = service.get_student_milestone_progress(user_id)
+
+    return [Milestone(**m) for m in milestones]
+
+
+@app.put("/api/student/{user_id}/milestones/{milestone_id}", response_model=Milestone)
+async def update_milestone_progress(
+    user_id: str,
+    milestone_id: str,
+    progress: MilestoneProgressUpdate,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Update a student's progress on a milestone."""
+    # Verify access
+    if not verify_user_access(current_user, user_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_student_service()
+
+    student = service.get_student(user_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    result = service.update_milestone_progress(
+        user_id, milestone_id, progress.completed, progress.notes
+    )
+
+    return {"id": milestone_id, "completed": progress.completed, "notes": progress.notes, **result}
+
+
+@app.get("/api/milestones", response_model=List[Milestone])
+async def get_degree_milestones():
+    """Get all standard degree milestones."""
+    service = get_student_service()
+    milestones = service.get_degree_milestones()
+
+    return [Milestone(**m) for m in milestones]
+
+
+# --- Advisor Portal Endpoints ---
+
+@app.get("/api/advisor/{advisor_id}/advisees", response_model=List[AdvisorAssignment])
+async def get_advisees(
+    advisor_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_advisor)
+):
+    """Get all students assigned to an advisor."""
+    # Advisors can only view their own advisees
+    if current_user.uid != advisor_id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_advisor_service()
+    advisees = service.get_advisees(advisor_id)
+
+    return advisees
+
+
+@app.post("/api/advisor/{advisor_id}/advisees", response_model=AdvisorAssignment)
+async def assign_advisee(
+    advisor_id: str,
+    request: AssignAdviseeRequest,
+    current_user: AuthenticatedUser = Depends(get_current_advisor)
+):
+    """Assign a student to an advisor."""
+    # Advisors can only assign to themselves
+    if current_user.uid != advisor_id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_advisor_service()
+
+    # Verify student exists
+    student_service = get_student_service()
+    student = student_service.get_student(request.studentId)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    assignment = service.assign_advisee(advisor_id, request.studentId)
+    return assignment
+
+
+@app.delete("/api/advisor/{advisor_id}/advisees/{student_id}")
+async def remove_advisee(
+    advisor_id: str,
+    student_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_advisor)
+):
+    """Remove a student from an advisor's list."""
+    # Advisors can only remove from their own list
+    if current_user.uid != advisor_id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_advisor_service()
+
+    success = service.remove_advisee(advisor_id, student_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+
+    return {"success": True, "message": "Advisee removed"}
+
+
+@app.get("/api/advisor/{advisor_id}/advisees/{student_id}", response_model=AdviseeResponse)
+async def get_advisee(
+    advisor_id: str,
+    student_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_advisor)
+):
+    """Get a specific advisee's details."""
+    # Advisors can only view their own advisees
+    if current_user.uid != advisor_id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_advisor_service()
+
+    advisee = service.get_advisee(advisor_id, student_id)
+    if not advisee:
+        raise HTTPException(status_code=404, detail="Advisee not found or not assigned to this advisor")
+
+    return AdviseeResponse(**advisee)
+
+
+@app.get("/api/advisor/{advisor_id}/advisees/{student_id}/notes", response_model=List[AdvisorNote])
+async def get_advisee_notes(
+    advisor_id: str,
+    student_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_advisor)
+):
+    """Get all notes for an advisee."""
+    # Advisors can only view their own notes
+    if current_user.uid != advisor_id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_advisor_service()
+
+    # Verify assignment exists
+    advisee = service.get_advisee(advisor_id, student_id)
+    if not advisee:
+        raise HTTPException(status_code=404, detail="Advisee not found or not assigned to this advisor")
+
+    notes = service.get_notes(advisor_id, student_id)
+    return [AdvisorNote(**n) for n in notes]
+
+
+@app.post("/api/advisor/{advisor_id}/advisees/{student_id}/notes", response_model=AdvisorNote)
+async def create_advisee_note(
+    advisor_id: str,
+    student_id: str,
+    note_data: NoteCreate,
+    current_user: AuthenticatedUser = Depends(get_current_advisor)
+):
+    """Create a new note for an advisee."""
+    # Advisors can only create notes for their own advisees
+    if current_user.uid != advisor_id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_advisor_service()
+
+    # Verify assignment exists
+    advisee = service.get_advisee(advisor_id, student_id)
+    if not advisee:
+        raise HTTPException(status_code=404, detail="Advisee not found or not assigned to this advisor")
+
+    note = service.create_note(advisor_id, student_id, note_data.note, note_data.visibility)
+    return AdvisorNote(**note)
+
+
+@app.put("/api/advisor/{advisor_id}/advisees/{student_id}/notes/{note_id}", response_model=AdvisorNote)
+async def update_advisee_note(
+    advisor_id: str,
+    student_id: str,
+    note_id: str,
+    note_data: NoteUpdate,
+    current_user: AuthenticatedUser = Depends(get_current_advisor)
+):
+    """Update a note for an advisee."""
+    # Advisors can only update their own notes
+    if current_user.uid != advisor_id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_advisor_service()
+
+    updated = service.update_note(advisor_id, note_id, note_data.note, note_data.visibility)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Note not found or not owned by this advisor")
+
+    return AdvisorNote(**updated)
+
+
+@app.delete("/api/advisor/{advisor_id}/advisees/{student_id}/notes/{note_id}")
+async def delete_advisee_note(
+    advisor_id: str,
+    student_id: str,
+    note_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_advisor)
+):
+    """Delete a note for an advisee."""
+    # Advisors can only delete their own notes
+    if current_user.uid != advisor_id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_advisor_service()
+
+    success = service.delete_note(advisor_id, note_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Note not found or not owned by this advisor")
+
+    return {"success": True, "message": "Note deleted"}
+
+
+@app.get("/api/advisor/{advisor_id}/alerts", response_model=List[AdvisorAlert])
+async def get_advisor_alerts(
+    advisor_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_advisor)
+):
+    """Get alerts for an advisor's advisees."""
+    # Advisors can only view their own alerts
+    if current_user.uid != advisor_id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    service = get_advisor_service()
+    alerts = service.get_alerts(advisor_id)
+
+    return [AdvisorAlert(**a) for a in alerts]
+
+
+# --- Schedule Validation & Prerequisite Endpoints ---
+
+@app.post("/api/student/validate-schedule", response_model=ValidateScheduleResponse)
+async def validate_schedule(
+    request: ValidateScheduleRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """
+    Validate a proposed course schedule for a student.
+
+    Checks:
+    - Prerequisites are met
+    - Credit limits (12-18 normal, 18+ overload)
+    - Workload balance
+    - Risk flags
+
+    Returns validation result with score and recommendations.
+    """
+    # Verify access
+    if not verify_user_access(current_user, request.studentId):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    engine = get_prerequisite_engine()
+
+    # Verify student exists
+    student_service = get_student_service()
+    student = student_service.get_student(request.studentId)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    # Validate schedule
+    result = engine.validate_schedule(request.studentId, request.proposedCourses)
+
+    # Convert risk flags to proper format
+    risk_flags = []
+    for flag in result.risk_flags:
+        risk_flags.append(RiskFlagResponse(
+            type=flag.get("type", ""),
+            severity=flag.get("severity", "low") if isinstance(flag.get("severity"), str) else flag.get("severity", {}).get("value", "low"),
+            message=flag.get("message", ""),
+            course_code=flag.get("course_code"),
+            details=flag.get("details", {})
+        ))
+
+    # Convert course details
+    course_details = []
+    for detail in result.course_details:
+        course_details.append(CourseValidationDetail(
+            code=detail.get("code", ""),
+            name=detail.get("name", ""),
+            credits=detail.get("credits", 3),
+            prerequisites=detail.get("prerequisites", []),
+            prerequisites_met=detail.get("prerequisites_met", True),
+            missing_prerequisites=detail.get("missing_prerequisites", [])
+        ))
+
+    return ValidateScheduleResponse(
+        valid=result.valid,
+        warnings=result.warnings,
+        errors=result.errors,
+        missingPrereqs=result.missing_prereqs,
+        riskFlags=risk_flags,
+        scheduleScore=ScheduleScoreResponse(**result.schedule_score),
+        totalCredits=result.total_credits,
+        courseDetails=course_details
+    )
+
+
+@app.get("/api/student/{user_id}/eligible-courses", response_model=List[EligibleCourseResponse])
+async def get_eligible_courses(
+    user_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """
+    Get all courses a student is eligible to take based on completed prerequisites.
+    """
+    # Verify access
+    if not verify_user_access(current_user, user_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    engine = get_prerequisite_engine()
+
+    # Verify student exists
+    student_service = get_student_service()
+    student = student_service.get_student(user_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    eligible = engine.get_eligible_courses(user_id)
+
+    return [EligibleCourseResponse(**course) for course in eligible]
+
+
+@app.get("/api/courses/{course_code}/prerequisites", response_model=PrerequisiteInfoResponse)
+async def get_course_prerequisites(course_code: str):
+    """
+    Get prerequisite information for a specific course.
+    """
+    engine = get_prerequisite_engine()
+
+    # Handle URL-encoded course codes
+    course_code = course_code.replace("_", " ")
+
+    prereq_info = engine.get_prerequisites(course_code)
+
+    if not prereq_info:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Prerequisite information not found for {course_code}"
+        )
+
+    return PrerequisiteInfoResponse(
+        course_code=prereq_info.course_code,
+        course_name=prereq_info.course_name,
+        credits=prereq_info.credits,
+        prerequisites=prereq_info.prerequisites,
+        semester_offered=prereq_info.semester_offered
+    )
+
+
+@app.get("/api/courses/{course_code}/prerequisite-chain")
+async def get_prerequisite_chain(course_code: str):
+    """
+    Get the full prerequisite chain for a course (prerequisites of prerequisites).
+    """
+    engine = get_prerequisite_engine()
+
+    # Handle URL-encoded course codes
+    course_code = course_code.replace("_", " ")
+
+    chain = engine.get_prerequisite_chain(course_code)
+
+    return chain
+
+
+# --- AI Chat Endpoints ---
+
+@app.post("/api/chat/message", response_model=ChatMessageResponse)
+async def chat_message(
+    request: ChatMessageRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """
+    Send a message to the AI academic advisor.
+
+    Features:
+    - RAG-powered responses using curriculum and policy documents
+    - Citation extraction from source materials
+    - Risk identification (academic, deadline, prerequisite issues)
+    - Recommended next steps
+
+    Requires authentication and access to the student's profile.
+    """
+    # Verify access
+    if not verify_user_access(current_user, request.studentId):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Verify student exists
+    student_service = get_student_service()
+    student = student_service.get_student(request.studentId)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    try:
+        chat_service = get_chat_service()
+        response = chat_service.chat(
+            student_id=request.studentId,
+            message=request.message,
+            chat_history=request.chatHistory,
+            user_id=current_user.uid,
+            user_role=current_user.role.value
+        )
+
+        return ChatMessageResponse(
+            content=response.content,
+            citations=[
+                ChatCitation(
+                    source=c.source,
+                    excerpt=c.excerpt,
+                    relevance=c.relevance
+                )
+                for c in response.citations
+            ],
+            risks=[
+                ChatRiskFlag(
+                    type=r.type,
+                    severity=r.severity,
+                    message=r.message
+                )
+                for r in response.risks
+            ],
+            nextSteps=[
+                ChatNextStep(
+                    action=n.action,
+                    priority=n.priority,
+                    deadline=n.deadline
+                )
+                for n in response.nextSteps
+            ]
+        )
+
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Chat service unavailable: {str(e)}"
+        )
 
 
 # Helpers

@@ -54,6 +54,9 @@ class CourseData:
     credits: int
     attributes: List[str] = field(default_factory=list)
     sections: List[SectionData] = field(default_factory=list)
+    prerequisites: List[str] = field(default_factory=list)
+    corequisites: List[str] = field(default_factory=list)
+    registration_restrictions: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for Firebase storage."""
@@ -65,6 +68,9 @@ class CourseData:
             "description": self.description,
             "credits": self.credits,
             "attributes": self.attributes,
+            "prerequisites": self.prerequisites,
+            "corequisites": self.corequisites,
+            "registration_restrictions": self.registration_restrictions,
             "sections": [
                 {
                     "crn": s.crn,
@@ -190,6 +196,15 @@ class FOSEFetcher:
             attributes = self._parse_attributes(first_details.get('attr', ''))
             credits = self._parse_credits(first_section.get('cart_opts', ''))
 
+            # Parse registration restrictions and prerequisites
+            registration_restrictions = first_details.get('registration_restrictions', '')
+            prerequisites = self._parse_prerequisites(registration_restrictions)
+
+            # Parse corequisites from course and section level
+            course_coreqs = first_details.get('course_coreqs', '')
+            section_coreqs = first_details.get('section_coreqs', '')
+            corequisites = self._parse_corequisites(course_coreqs, section_coreqs)
+
             # Build sections
             section_list = []
             for sec in sections_data:
@@ -228,6 +243,9 @@ class FOSEFetcher:
                 credits=credits,
                 attributes=attributes,
                 sections=section_list,
+                prerequisites=prerequisites,
+                corequisites=corequisites,
+                registration_restrictions=registration_restrictions,
             ))
 
         print(f"[{datetime.now()}] Processed {len(courses)} unique courses")
@@ -288,6 +306,71 @@ class FOSEFetcher:
         if not desc:
             return ""
         return re.sub(r'<[^>]+>', '', desc).strip()
+
+    def _parse_prerequisites(self, registration_restrictions: str) -> List[str]:
+        """
+        Extract prerequisite course codes from registration_restrictions HTML.
+
+        The HTML contains prereq info in <p class="prereq"> tags.
+        Example: '<p class="prereq">Prerequisite: BUAD 323.<br/>A minimum grade of D- is required in BUAD 323.</p>'
+
+        Returns:
+            List of prerequisite course codes (e.g., ["BUAD 323", "BUAD 203"])
+        """
+        if not registration_restrictions:
+            return []
+
+        prerequisites = []
+
+        # Extract content from prereq paragraphs
+        prereq_matches = re.findall(r'<p class="prereq"[^>]*>(.*?)</p>', registration_restrictions, re.DOTALL | re.IGNORECASE)
+
+        for prereq_text in prereq_matches:
+            # Remove HTML tags to get plain text
+            plain_text = re.sub(r'<[^>]+>', ' ', prereq_text)
+
+            # Find all course codes (SUBJ NNN pattern, e.g., "BUAD 323", "CSCI 141")
+            # Course codes are typically 3-4 uppercase letters followed by space and 3-4 digits
+            course_codes = re.findall(r'\b([A-Z]{2,4})\s+(\d{3}[A-Z]?)\b', plain_text)
+
+            for subj, num in course_codes:
+                course_code = f"{subj} {num}"
+                if course_code not in prerequisites:
+                    prerequisites.append(course_code)
+
+        return prerequisites
+
+    def _parse_corequisites(self, course_coreqs: str, section_coreqs: str = "") -> List[str]:
+        """
+        Extract corequisite course codes from course_coreqs and section_coreqs fields.
+
+        Args:
+            course_coreqs: Course-level corequisites (e.g., "AMST 200D")
+            section_coreqs: Section-specific corequisites
+
+        Returns:
+            List of corequisite course codes
+        """
+        corequisites = []
+
+        # Parse course-level corequisites
+        if course_coreqs:
+            # Course coreqs may be comma-separated or contain multiple course codes
+            codes = re.findall(r'\b([A-Z]{2,4})\s+(\d{3}[A-Z]?)\b', course_coreqs)
+            for subj, num in codes:
+                course_code = f"{subj} {num}"
+                if course_code not in corequisites:
+                    corequisites.append(course_code)
+
+        # Parse section-specific corequisites
+        if section_coreqs:
+            codes = re.findall(r'\b([A-Z]{2,4})\s+(\d{3}[A-Z]?)\b', section_coreqs)
+            for subj, num in codes:
+                course_code = f"{subj} {num}"
+                if course_code not in corequisites:
+                    corequisites.append(course_code)
+
+        return corequisites
 
     def _parse_course_code(self, code: str) -> Tuple[str, str]:
         """Split course code into subject and number."""
