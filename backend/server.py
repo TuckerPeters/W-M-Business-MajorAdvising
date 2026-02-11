@@ -1039,9 +1039,18 @@ async def validate_schedule(
     # Convert risk flags to proper format
     risk_flags = []
     for flag in result.risk_flags:
+        # Handle severity which may be a RiskLevel enum, string, or dict
+        severity_raw = flag.get("severity", "low")
+        if hasattr(severity_raw, 'value'):  # It's an Enum
+            severity = severity_raw.value
+        elif isinstance(severity_raw, str):
+            severity = severity_raw
+        else:
+            severity = "low"
+
         risk_flags.append(RiskFlagResponse(
             type=flag.get("type", ""),
-            severity=flag.get("severity", "low") if isinstance(flag.get("severity"), str) else flag.get("severity", {}).get("value", "low"),
+            severity=severity,
             message=flag.get("message", ""),
             course_code=flag.get("course_code"),
             details=flag.get("details", {})

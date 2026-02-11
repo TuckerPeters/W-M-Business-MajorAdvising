@@ -272,7 +272,7 @@ class StudentService:
 
         # Check seat availability
         if check_seats:
-            seats_available = target_section.get("seats_available", 0)
+            seats_available = target_section.get("available", 0)
             if seats_available <= 0:
                 raise NoSeatsAvailableError(
                     f"No seats available in {course_code} Section {section_number}",
@@ -444,7 +444,7 @@ class StudentService:
             # Check if waitlist is needed for planned courses with a section
             if status == "planned" and section_number and isinstance(validation_result, dict):
                 section = validation_result.get("section")
-                if section and section.get("seats_available", 0) <= 0:
+                if section and section.get("available", 0) <= 0:
                     waitlist_required = True
 
         # Check for time conflicts (only for enrolled or planned courses with schedule info)

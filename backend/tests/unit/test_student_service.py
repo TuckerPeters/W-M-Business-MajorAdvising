@@ -735,15 +735,33 @@ class TestEnrollmentTermValidation:
         mock_doc_ref.id = "new_enrollment_id"
         mock_db.collection.return_value.document.return_value = mock_doc_ref
 
-        # Use a future term
-        result = service.add_enrollment("user123", {
-            "courseCode": "BUAD 327",
-            "term": "Fall 2030",  # Future term
-            "status": "planned"
-        })
+        # Mock no time conflicts
+        mock_query = MagicMock()
+        mock_query.stream.return_value = []
+        mock_db.collection.return_value.where.return_value = mock_query
 
-        mock_doc_ref.set.assert_called_once()
-        assert result["term"] == "Fall 2030"
+        # Mock course service
+        with patch('services.firebase.get_course_service') as mock_course_svc:
+            mock_course_svc.return_value.get_course.return_value = {
+                "course_code": "BUAD 327",
+                "sections": []
+            }
+
+            # Mock prerequisite engine
+            with patch('services.prerequisites.get_prerequisite_engine') as mock_prereq:
+                mock_prereq.return_value.get_student_completed_courses.return_value = set()
+                mock_prereq.return_value.get_student_current_courses.return_value = set()
+                mock_prereq.return_value.check_prerequisites_met.return_value = (True, [])
+
+                # Use a future term
+                result = service.add_enrollment("user123", {
+                    "courseCode": "BUAD 327",
+                    "term": "Fall 2030",  # Future term
+                    "status": "planned"
+                })
+
+                mock_doc_ref.set.assert_called_once()
+                assert result["term"] == "Fall 2030"
 
 
 class TestTimeConflictValidation:
@@ -921,8 +939,8 @@ class TestCourseValidation:
             mock_course = {
                 "course_code": "BUAD 327",
                 "sections": [
-                    {"section_number": "01", "seats_available": 10},
-                    {"section_number": "02", "seats_available": 5}
+                    {"section_number": "01", "available": 10},
+                    {"section_number": "02", "available": 5}
                 ]
             }
             mock_course_svc.return_value.get_course.return_value = mock_course
@@ -936,8 +954,8 @@ class TestCourseValidation:
             mock_course = {
                 "course_code": "BUAD 327",
                 "sections": [
-                    {"section_number": "01", "seats_available": 10},
-                    {"section_number": "02", "seats_available": 5}
+                    {"section_number": "01", "available": 10},
+                    {"section_number": "02", "available": 5}
                 ]
             }
             mock_course_svc.return_value.get_course.return_value = mock_course
@@ -946,7 +964,7 @@ class TestCourseValidation:
 
             assert result["section"]["section_number"] == "01"
 
-    def test_validate_no_seats_available(self, service):
+    def test_validate_no_available(self, service):
         """Should raise NoSeatsAvailableError when section is full"""
         from services.student import NoSeatsAvailableError
 
@@ -954,7 +972,7 @@ class TestCourseValidation:
             mock_course = {
                 "course_code": "BUAD 327",
                 "sections": [
-                    {"section_number": "01", "seats_available": 0}  # Full
+                    {"section_number": "01", "available": 0}  # Full
                 ]
             }
             mock_course_svc.return_value.get_course.return_value = mock_course
@@ -962,20 +980,20 @@ class TestCourseValidation:
             with pytest.raises(NoSeatsAvailableError, match="No seats available"):
                 service.validate_course_section("BUAD 327", section_number="01", check_seats=True)
 
-    def test_validate_seats_available(self, service):
+    def test_validate_available(self, service):
         """Should pass when seats are available"""
         with patch('services.firebase.get_course_service') as mock_course_svc:
             mock_course = {
                 "course_code": "BUAD 327",
                 "sections": [
-                    {"section_number": "01", "seats_available": 5}
+                    {"section_number": "01", "available": 5}
                 ]
             }
             mock_course_svc.return_value.get_course.return_value = mock_course
 
             result = service.validate_course_section("BUAD 327", section_number="01", check_seats=True)
 
-            assert result["section"]["seats_available"] == 5
+            assert result["section"]["available"] == 5
 
     def test_validate_skip_seat_check(self, service):
         """Should skip seat check when check_seats=False"""
@@ -983,7 +1001,7 @@ class TestCourseValidation:
             mock_course = {
                 "course_code": "BUAD 327",
                 "sections": [
-                    {"section_number": "01", "seats_available": 0}  # Full but should pass
+                    {"section_number": "01", "available": 0}  # Full but should pass
                 ]
             }
             mock_course_svc.return_value.get_course.return_value = mock_course
@@ -1017,7 +1035,7 @@ class TestAddEnrollmentFullValidation:
         with patch('services.firebase.get_course_service') as mock_course_svc:
             mock_course = {
                 "course_code": "BUAD 327",
-                "sections": [{"section_number": "01", "seats_available": 10}]
+                "sections": [{"section_number": "01", "available": 10}]
             }
             mock_course_svc.return_value.get_course.return_value = mock_course
 
@@ -1031,20 +1049,26 @@ class TestAddEnrollmentFullValidation:
             mock_doc_ref.id = "new_enrollment"
             mock_db.collection.return_value.document.return_value = mock_doc_ref
 
-            result = service.add_enrollment("user123", {
-                "courseCode": "BUAD 327",
-                "courseName": "Investments",
-                "term": "Fall 2030",
-                "status": "planned",
-                "sectionNumber": "01",
-                "meetingDays": "MWF",
-                "startTime": "10:00",
-                "endTime": "10:50"
-            })
+            # Mock prerequisite engine
+            with patch('services.prerequisites.get_prerequisite_engine') as mock_prereq:
+                mock_prereq.return_value.get_student_completed_courses.return_value = {"BUAD 323"}
+                mock_prereq.return_value.get_student_current_courses.return_value = set()
+                mock_prereq.return_value.check_prerequisites_met.return_value = (True, [])
 
-            assert result["courseCode"] == "BUAD 327"
-            assert result["sectionNumber"] == "01"
-            mock_doc_ref.set.assert_called_once()
+                result = service.add_enrollment("user123", {
+                    "courseCode": "BUAD 327",
+                    "courseName": "Investments",
+                    "term": "Fall 2030",
+                    "status": "planned",
+                    "sectionNumber": "01",
+                    "meetingDays": "MWF",
+                    "startTime": "10:00",
+                    "endTime": "10:50"
+                })
+
+                assert result["courseCode"] == "BUAD 327"
+                assert result["sectionNumber"] == "01"
+                mock_doc_ref.set.assert_called_once()
 
     def test_add_enrollment_completed_skips_course_validation(self, service, mock_db):
         """Should skip course validation for completed (historical) courses"""
@@ -1077,7 +1101,7 @@ class TestAddEnrollmentFullValidation:
         with patch('services.firebase.get_course_service') as mock_course_svc:
             mock_course = {
                 "course_code": "BUAD 327",
-                "sections": [{"section_number": "01", "seats_available": 0}]  # Full!
+                "sections": [{"section_number": "01", "available": 0}]  # Full!
             }
             mock_course_svc.return_value.get_course.return_value = mock_course
 
@@ -1091,17 +1115,23 @@ class TestAddEnrollmentFullValidation:
             mock_doc_ref.id = "waitlist_enrollment"
             mock_db.collection.return_value.document.return_value = mock_doc_ref
 
-            result = service.add_enrollment("user123", {
-                "courseCode": "BUAD 327",
-                "term": "Fall 2030",
-                "status": "planned",
-                "sectionNumber": "01"
-            })
+            # Mock prerequisite engine
+            with patch('services.prerequisites.get_prerequisite_engine') as mock_prereq:
+                mock_prereq.return_value.get_student_completed_courses.return_value = {"BUAD 323"}
+                mock_prereq.return_value.get_student_current_courses.return_value = set()
+                mock_prereq.return_value.check_prerequisites_met.return_value = (True, [])
 
-            # Should succeed but with waitlist flag
-            assert result["courseCode"] == "BUAD 327"
-            assert result["waitlistRequired"] is True
-            mock_doc_ref.set.assert_called_once()
+                result = service.add_enrollment("user123", {
+                    "courseCode": "BUAD 327",
+                    "term": "Fall 2030",
+                    "status": "planned",
+                    "sectionNumber": "01"
+                })
+
+                # Should succeed but with waitlist flag
+                assert result["courseCode"] == "BUAD 327"
+                assert result["waitlistRequired"] is True
+                mock_doc_ref.set.assert_called_once()
 
     def test_add_enrollment_available_section_no_waitlist(self, service, mock_db):
         """Should set waitlistRequired=False when seats are available"""
@@ -1109,7 +1139,7 @@ class TestAddEnrollmentFullValidation:
         with patch('services.firebase.get_course_service') as mock_course_svc:
             mock_course = {
                 "course_code": "BUAD 327",
-                "sections": [{"section_number": "01", "seats_available": 5}]
+                "sections": [{"section_number": "01", "available": 5}]
             }
             mock_course_svc.return_value.get_course.return_value = mock_course
 
@@ -1123,15 +1153,21 @@ class TestAddEnrollmentFullValidation:
             mock_doc_ref.id = "available_enrollment"
             mock_db.collection.return_value.document.return_value = mock_doc_ref
 
-            result = service.add_enrollment("user123", {
-                "courseCode": "BUAD 327",
-                "term": "Fall 2030",
-                "status": "planned",
-                "sectionNumber": "01"
-            })
+            # Mock prerequisite engine
+            with patch('services.prerequisites.get_prerequisite_engine') as mock_prereq:
+                mock_prereq.return_value.get_student_completed_courses.return_value = {"BUAD 323"}
+                mock_prereq.return_value.get_student_current_courses.return_value = set()
+                mock_prereq.return_value.check_prerequisites_met.return_value = (True, [])
 
-            assert result["waitlistRequired"] is False
-            mock_doc_ref.set.assert_called_once()
+                result = service.add_enrollment("user123", {
+                    "courseCode": "BUAD 327",
+                    "term": "Fall 2030",
+                    "status": "planned",
+                    "sectionNumber": "01"
+                })
+
+                assert result["waitlistRequired"] is False
+                mock_doc_ref.set.assert_called_once()
 
 
 class TestPrerequisiteValidation:
