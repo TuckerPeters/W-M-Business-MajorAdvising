@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from "next/navigation";
 import { useState } from 'react';
 import Link from 'next/link';
 import ProgressPanel from '@/components/student/ProgressPanel';
@@ -26,6 +27,7 @@ import {
 } from 'lucide-react';
 
 export default function StudentDashboard() {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<'overview' | 'schedule' | 'chat'>('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -48,12 +50,24 @@ export default function StudentDashboard() {
                 <p className="text-sm text-muted-foreground">{mockStudent.name}</p>
               </div>
             </div>
-            <Link href="/">
-              <Button variant="outline" size="sm">
+            
+            <div className="flex gap-3">
+              <Link href="/">
+               <Button variant ="outline" size="sm">
                 <Home className="h-4 w-4 mr-2" />
                 Home
-              </Button>
-            </Link>
+                </Button>
+              </Link>
+
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => router.push("/login")}
+              >
+                Logout
+                </Button>
+              </div>
+
           </div>
         </div>
       </header>
