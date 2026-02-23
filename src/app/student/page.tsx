@@ -1,13 +1,14 @@
 'use client';
 
-import { useRouter } from "next/navigation";
-import { useState } from 'react';
+gimport { useState } from 'react';
 import Link from 'next/link';
 import ProgressPanel from '@/components/student/ProgressPanel';
 import CourseList from '@/components/student/CourseList';
 import ChatInterface from '@/components/student/ChatInterface';
 import ScheduleBuilder from '@/components/student/ScheduleBuilder';
 import Button from '@/components/ui/Button';
+import Badge from '@/components/ui/Badge';
+import { Course } from '@/types';
 import {
   mockStudent,
   mockCompletedCourses,
@@ -24,12 +25,38 @@ import {
   MessageSquare,
   Menu,
   X,
+  AlertCircle,
 } from 'lucide-react';
 
 export default function StudentDashboard() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<'overview' | 'schedule' | 'chat'>('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [availableCourses, setAvailableCourses] = useState<Course[]>(mockAvailableCourses);
+  const [loading, setLoading] = useState(true);
+  const [isUsingBackend, setIsUsingBackend] = useState(false);
+
+  // Fetch available courses from backend on mount
+  useEffect(() => {
+    async function fetchCourses() {
+      try {
+        const response = await fetch('/api/courses?limit=200');
+        const data = await response.json();
+
+        if (data.courses && data.courses.length > 0) {
+          setAvailableCourses(data.courses);
+          setIsUsingBackend(data.isFromBackend || false);
+        }
+      } catch (error) {
+        console.error('Error fetching courses:', error);
+        // Keep using mock data on error
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchCourses();
+  }, []);
 
   return (
     <div className="min-h-screen bg-background">
@@ -73,6 +100,28 @@ export default function StudentDashboard() {
       </header>
 
       <div className="container mx-auto px-4 py-6">
+        {/* Backend Status Banner */}
+        {!loading && isUsingBackend && (
+          <div className="mb-4 p-3 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary" className="bg-green-100 text-green-800">Live Data</Badge>
+              <span className="text-sm text-green-800 dark:text-green-200">
+                Connected to course catalog backend
+              </span>
+            </div>
+          </div>
+        )}
+        {!loading && !isUsingBackend && (
+          <div className="mb-4 p-3 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 text-yellow-600" />
+              <span className="text-sm text-yellow-800 dark:text-yellow-200">
+                Using demo data - backend unavailable
+              </span>
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-col md:flex-row gap-6">
           {/* Sidebar Navigation */}
           <aside
@@ -141,10 +190,19 @@ export default function StudentDashboard() {
             )}
 
             {activeTab === 'schedule' && (
-              <ScheduleBuilder
-                availableCourses={mockAvailableCourses}
-                currentCourses={mockCurrentCourses}
-              />
+              loading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-center space-y-3">
+                    <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mx-auto"></div>
+                    <p className="text-sm text-muted-foreground">Loading courses...</p>
+                  </div>
+                </div>
+              ) : (
+                <ScheduleBuilder
+                  availableCourses={availableCourses}
+                  currentCourses={mockCurrentCourses}
+                />
+              )
             )}
 
             {activeTab === 'chat' && (

@@ -24,6 +24,7 @@ export interface Course {
   hasLab: boolean;
   difficultyIndex: number;
   prereqs: string[];
+  description?: string;
   term?: string;
   grade?: string;
   status?: 'enrolled' | 'planned' | 'completed';
