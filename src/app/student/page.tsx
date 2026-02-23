@@ -1,6 +1,7 @@
 'use client';
 
-gimport { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import ProgressPanel from '@/components/student/ProgressPanel';
 import CourseList from '@/components/student/CourseList';
