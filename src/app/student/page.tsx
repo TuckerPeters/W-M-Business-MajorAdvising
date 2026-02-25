@@ -11,13 +11,10 @@ import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import { Course } from '@/types';
 import {
-  mockStudent,
-  mockCompletedCourses,
-  mockCurrentCourses,
-  mockAvailableCourses,
-  mockMilestones,
-  mockChatMessages,
-} from '@/data/mockData';
+  getStudentProfile,
+  getCourseProgress,
+  getCourseCatalog,
+} from '@/lib/api-client';
 import {
   GraduationCap,
   Home,
@@ -31,33 +28,54 @@ import {
 
 export default function StudentDashboard() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'overview' | 'schedule' | 'chat'>('overview');
+
+  const [activeTab, setActiveTab] =
+    useState<'overview' | 'schedule' | 'chat'>('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [availableCourses, setAvailableCourses] = useState<Course[]>(mockAvailableCourses);
+
+  const [student, setStudent] = useState<any>(null);
+  const [currentCourses, setCurrentCourses] = useState<Course[]>([]);
+  const [completedCourses, setCompletedCourses] = useState<Course[]>([]);
+  const [milestones, setMilestones] = useState<any[]>([]);
+  const [availableCourses, setAvailableCourses] = useState<Course[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [isUsingBackend, setIsUsingBackend] = useState(false);
 
-  // Fetch available courses from backend on mount
   useEffect(() => {
-    async function fetchCourses() {
+    async function fetchDashboard() {
       try {
-        const response = await fetch('/api/courses?limit=200');
-        const data = await response.json();
+        const [profile, progress, catalog] = await Promise.all([
+          getStudentProfile(),
+          getCourseProgress(),
+          getCourseCatalog(),
+        ]);
 
-        if (data.courses && data.courses.length > 0) {
-          setAvailableCourses(data.courses);
-          setIsUsingBackend(data.isFromBackend || false);
-        }
+        setStudent(profile);
+        setCurrentCourses(progress.currentCourses || []);
+        setCompletedCourses(progress.completedCourses || []);
+        setMilestones(progress.milestones || []);
+        setAvailableCourses(catalog.courses || []);
+
+        setIsUsingBackend(true);
       } catch (error) {
-        console.error('Error fetching courses:', error);
-        // Keep using mock data on error
+        console.error('Dashboard fetch failed:', error);
+        setIsUsingBackend(false);
       } finally {
         setLoading(false);
       }
     }
 
-    fetchCourses();
+    fetchDashboard();
   }, []);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin h-10 w-10 border-4 border-primary border-t-transparent rounded-full"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -72,93 +90,91 @@ export default function StudentDashboard() {
               >
                 {sidebarOpen ? <X /> : <Menu />}
               </button>
+
               <GraduationCap className="h-8 w-8 text-primary" />
+
               <div>
-                <h1 className="text-xl font-bold">W&M Business Advising</h1>
-                <p className="text-sm text-muted-foreground">{mockStudent.name}</p>
+                <h1 className="text-xl font-bold">
+                  W&M Business Advising
+                </h1>
+                <p className="text-sm text-muted-foreground">
+                  {student?.name}
+                </p>
               </div>
             </div>
-            
+
             <div className="flex gap-3">
               <Link href="/">
-               <Button variant ="outline" size="sm">
-                <Home className="h-4 w-4 mr-2" />
-                Home
+                <Button variant="outline" size="sm">
+                  <Home className="h-4 w-4 mr-2" />
+                  Home
                 </Button>
               </Link>
 
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 size="sm"
-                onClick={() => router.push("/login")}
+                onClick={() => router.push('/login')}
               >
                 Logout
-                </Button>
-              </div>
-
+              </Button>
+            </div>
           </div>
         </div>
       </header>
 
       <div className="container mx-auto px-4 py-6">
         {/* Backend Status Banner */}
-        {!loading && isUsingBackend && (
-          <div className="mb-4 p-3 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
+        {isUsingBackend ? (
+          <div className="mb-4 p-3 rounded-lg bg-green-50 border border-green-200">
             <div className="flex items-center gap-2">
-              <Badge variant="secondary" className="bg-green-100 text-green-800">Live Data</Badge>
-              <span className="text-sm text-green-800 dark:text-green-200">
-                Connected to course catalog backend
+              <Badge variant="secondary">
+                Live Data
+              </Badge>
+              <span className="text-sm">
+                Connected to backend services
               </span>
             </div>
           </div>
-        )}
-        {!loading && !isUsingBackend && (
-          <div className="mb-4 p-3 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
+        ) : (
+          <div className="mb-4 p-3 rounded-lg bg-yellow-50 border border-yellow-200">
             <div className="flex items-center gap-2">
               <AlertCircle className="h-4 w-4 text-yellow-600" />
-              <span className="text-sm text-yellow-800 dark:text-yellow-200">
-                Using demo data - backend unavailable
+              <span className="text-sm">
+                Backend unavailable
               </span>
             </div>
           </div>
         )}
 
         <div className="flex flex-col md:flex-row gap-6">
-          {/* Sidebar Navigation */}
+          {/* Sidebar */}
           <aside
-            className={`${
-              sidebarOpen ? 'block' : 'hidden'
-            } md:block md:w-64 space-y-2`}
+            className={`${sidebarOpen ? 'block' : 'hidden'
+              } md:block md:w-64 space-y-2`}
           >
             <Button
               variant={activeTab === 'overview' ? 'default' : 'ghost'}
               className="w-full justify-start"
-              onClick={() => {
-                setActiveTab('overview');
-                setSidebarOpen(false);
-              }}
+              onClick={() => setActiveTab('overview')}
             >
               <BookOpen className="h-4 w-4 mr-2" />
               Overview
             </Button>
+
             <Button
               variant={activeTab === 'schedule' ? 'default' : 'ghost'}
               className="w-full justify-start"
-              onClick={() => {
-                setActiveTab('schedule');
-                setSidebarOpen(false);
-              }}
+              onClick={() => setActiveTab('schedule')}
             >
               <Calendar className="h-4 w-4 mr-2" />
               Schedule Builder
             </Button>
+
             <Button
               variant={activeTab === 'chat' ? 'default' : 'ghost'}
               className="w-full justify-start"
-              onClick={() => {
-                setActiveTab('chat');
-                setSidebarOpen(false);
-              }}
+              onClick={() => setActiveTab('chat')}
             >
               <MessageSquare className="h-4 w-4 mr-2" />
               Ask Advisor
@@ -171,18 +187,25 @@ export default function StudentDashboard() {
               <div className="space-y-6">
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   <div className="lg:col-span-1">
-                    <ProgressPanel student={mockStudent} milestones={mockMilestones} />
+                    {student && (
+                      <ProgressPanel
+                        student={student}
+                        milestones={milestones}
+                      />
+                    )}
                   </div>
+
                   <div className="lg:col-span-2 space-y-6">
                     <CourseList
                       title="Current Courses"
-                      description="Fall 2024"
-                      courses={mockCurrentCourses}
+                      description="Active Semester"
+                      courses={currentCourses}
                     />
+
                     <CourseList
                       title="Completed Courses"
-                      description="Your academic history"
-                      courses={mockCompletedCourses}
+                      description="Academic History"
+                      courses={completedCourses}
                       showGrades
                     />
                   </div>
@@ -191,24 +214,15 @@ export default function StudentDashboard() {
             )}
 
             {activeTab === 'schedule' && (
-              loading ? (
-                <div className="flex items-center justify-center py-12">
-                  <div className="text-center space-y-3">
-                    <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mx-auto"></div>
-                    <p className="text-sm text-muted-foreground">Loading courses...</p>
-                  </div>
-                </div>
-              ) : (
-                <ScheduleBuilder
-                  availableCourses={availableCourses}
-                  currentCourses={mockCurrentCourses}
-                />
-              )
+              <ScheduleBuilder
+                availableCourses={availableCourses}
+                currentCourses={currentCourses}
+              />
             )}
 
             {activeTab === 'chat' && (
               <div className="h-[calc(100vh-200px)]">
-                <ChatInterface initialMessages={mockChatMessages} />
+                <ChatInterface />
               </div>
             )}
           </main>
