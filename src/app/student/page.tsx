@@ -12,7 +12,7 @@ import Badge from '@/components/ui/Badge';
 import { Course } from '@/types';
 import {
   getStudentProfile,
-  getCourseProgress,
+  getStudentProgress,
   getCourseCatalog,
 } from '@/lib/api-client';
 import {
@@ -47,7 +47,7 @@ export default function StudentDashboard() {
       try {
         const [profile, progress, catalog] = await Promise.all([
           getStudentProfile(),
-          getCourseProgress(),
+          getStudentProgress(),
           getCourseCatalog(),
         ]);
 
