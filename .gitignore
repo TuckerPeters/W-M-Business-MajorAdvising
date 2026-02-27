@@ -34,3 +34,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# firebase admin sdk keys
+premajorandmajoradvising-firebase-adminsdk-fbsvc-*.json
+
+# notes
+notes1.txt

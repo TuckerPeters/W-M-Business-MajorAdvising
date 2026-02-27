@@ -84,6 +84,8 @@ class HealthResponse(BaseModel):
     term_code: str
     semester: str
     is_registration_period: bool
+    firebase: str
+    redis: str
 
 
 class CacheStatsResponse(BaseModel):
@@ -454,11 +456,32 @@ app.state.enable_scheduler = True
 @app.get("/", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint"""
+    # Check Firebase connectivity
+    firebase_status = "connected"
+    try:
+        db = get_firestore_client()
+        # Try a simple operation
+        db.collection("metadata").document("health_check").get()
+    except Exception as e:
+        firebase_status = f"error: {str(e)[:50]}"
+
+    # Check Redis connectivity
+    redis_status = "unavailable"
+    try:
+        from services.cache import get_cache
+        cache = get_cache()
+        if cache.is_connected:
+            redis_status = "connected"
+    except Exception:
+        redis_status = "unavailable"
+
     return HealthResponse(
-        status="ok",
+        status="ok" if firebase_status == "connected" else "degraded",
         term_code=SemesterManager.get_trackable_term_code(),
         semester=SemesterManager.get_trackable_display_name(),
-        is_registration_period=SemesterManager.is_registration_period()
+        is_registration_period=SemesterManager.is_registration_period(),
+        firebase=firebase_status,
+        redis=redis_status
     )
 
 
