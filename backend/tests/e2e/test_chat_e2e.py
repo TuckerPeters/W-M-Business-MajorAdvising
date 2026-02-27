@@ -598,3 +598,368 @@ class TestChatErrorHandling:
         assert data["citations"] == []
         assert data["risks"] == []
         assert data["nextSteps"] == []
+
+
+@pytest.mark.e2e
+class TestConversationEndpoints:
+    """
+    Test conversation CRUD endpoints.
+    Verifies server correctly routes, validates, and transforms
+    conversation requests/responses.
+    """
+
+    def test_create_conversation(self, authenticated_app_client, timed_request):
+        """Should create a conversation and return it."""
+        client = authenticated_app_client["client"]
+
+        mock_conv_service = MagicMock()
+        mock_conv_service.create_conversation.return_value = {
+            "id": "conv_123",
+            "studentId": "test-student-123",
+            "userId": "test-student-123",
+            "userRole": "student",
+            "title": "",
+            "status": "active",
+            "messageCount": 0,
+            "createdAt": "2025-01-01T00:00:00",
+            "updatedAt": "2025-01-01T00:00:00",
+            "lastMessagePreview": ""
+        }
+
+        with patch('server.get_conversation_service', return_value=mock_conv_service):
+            response, elapsed = timed_request(
+                client, "POST", "/api/conversations",
+                json={"studentId": "test-student-123"}
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == "conv_123"
+        assert data["studentId"] == "test-student-123"
+        assert data["status"] == "active"
+
+    def test_list_conversations(self, authenticated_app_client, timed_request):
+        """Should list conversations for a student."""
+        client = authenticated_app_client["client"]
+
+        mock_conv_service = MagicMock()
+        mock_conv_service.list_conversations.return_value = [
+            {
+                "id": "conv_1",
+                "studentId": "test-student-123",
+                "userId": "test-student-123",
+                "userRole": "student",
+                "title": "Course Planning",
+                "status": "active",
+                "messageCount": 4,
+                "createdAt": "2025-01-01T00:00:00",
+                "updatedAt": "2025-01-02T00:00:00",
+                "lastMessagePreview": "Thanks for the help!"
+            }
+        ]
+
+        with patch('server.get_conversation_service', return_value=mock_conv_service):
+            response, elapsed = timed_request(
+                client, "GET", "/api/student/test-student-123/conversations"
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert data["conversations"][0]["title"] == "Course Planning"
+        assert data["conversations"][0]["messageCount"] == 4
+
+    def test_get_conversation(self, authenticated_app_client, timed_request):
+        """Should get a single conversation by ID."""
+        client = authenticated_app_client["client"]
+
+        mock_conv_service = MagicMock()
+        mock_conv_service.get_conversation.return_value = {
+            "id": "conv_123",
+            "studentId": "test-student-123",
+            "userId": "test-student-123",
+            "userRole": "student",
+            "title": "Finance Questions",
+            "status": "active",
+            "messageCount": 2,
+            "createdAt": "2025-01-01T00:00:00",
+            "updatedAt": "2025-01-01T00:00:00",
+            "lastMessagePreview": "I recommend BUAD 327"
+        }
+
+        with patch('server.get_conversation_service', return_value=mock_conv_service):
+            response, elapsed = timed_request(
+                client, "GET", "/api/conversations/conv_123"
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == "conv_123"
+        assert data["title"] == "Finance Questions"
+
+    def test_get_conversation_not_found(self, authenticated_app_client, timed_request):
+        """Should return 404 for nonexistent conversation."""
+        client = authenticated_app_client["client"]
+
+        mock_conv_service = MagicMock()
+        mock_conv_service.get_conversation.return_value = None
+
+        with patch('server.get_conversation_service', return_value=mock_conv_service):
+            response, elapsed = timed_request(
+                client, "GET", "/api/conversations/nonexistent"
+            )
+
+        assert response.status_code == 404
+
+    def test_get_conversation_messages(self, authenticated_app_client, timed_request):
+        """Should return messages in chronological order."""
+        client = authenticated_app_client["client"]
+
+        mock_conv_service = MagicMock()
+        mock_conv_service.get_conversation.return_value = {
+            "id": "conv_123",
+            "studentId": "test-student-123",
+            "userId": "test-student-123",
+            "userRole": "student",
+            "title": "Chat",
+            "status": "active",
+            "messageCount": 2,
+            "createdAt": "2025-01-01T00:00:00",
+            "updatedAt": "2025-01-01T00:00:00",
+            "lastMessagePreview": ""
+        }
+        mock_conv_service.get_messages.return_value = [
+            {
+                "id": "msg_1",
+                "conversationId": "conv_123",
+                "role": "user",
+                "content": "What courses should I take?",
+                "citations": [],
+                "risks": [],
+                "nextSteps": [],
+                "createdAt": "2025-01-01T00:00:00"
+            },
+            {
+                "id": "msg_2",
+                "conversationId": "conv_123",
+                "role": "assistant",
+                "content": "I recommend BUAD 327.",
+                "citations": [{"source": "Finance Req", "excerpt": "...", "relevance": 0.9}],
+                "risks": [],
+                "nextSteps": [],
+                "createdAt": "2025-01-01T00:00:01"
+            }
+        ]
+
+        with patch('server.get_conversation_service', return_value=mock_conv_service):
+            response, elapsed = timed_request(
+                client, "GET", "/api/conversations/conv_123/messages"
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        assert data["messages"][0]["role"] == "user"
+        assert data["messages"][1]["role"] == "assistant"
+        assert len(data["messages"][1]["citations"]) == 1
+
+    def test_update_conversation_title(self, authenticated_app_client, timed_request):
+        """Should update conversation title."""
+        client = authenticated_app_client["client"]
+
+        mock_conv_service = MagicMock()
+        mock_conv_service.get_conversation.return_value = {
+            "id": "conv_123",
+            "studentId": "test-student-123",
+            "userId": "test-student-123",
+            "userRole": "student",
+            "title": "Old Title",
+            "status": "active",
+            "messageCount": 0,
+            "createdAt": "2025-01-01T00:00:00",
+            "updatedAt": "2025-01-01T00:00:00",
+            "lastMessagePreview": ""
+        }
+        mock_conv_service.update_conversation_title.return_value = {
+            "id": "conv_123",
+            "studentId": "test-student-123",
+            "userId": "test-student-123",
+            "userRole": "student",
+            "title": "New Title",
+            "status": "active",
+            "messageCount": 0,
+            "createdAt": "2025-01-01T00:00:00",
+            "updatedAt": "2025-01-01T00:00:01",
+            "lastMessagePreview": ""
+        }
+
+        with patch('server.get_conversation_service', return_value=mock_conv_service):
+            response, elapsed = timed_request(
+                client, "PUT", "/api/conversations/conv_123/title",
+                json={"title": "New Title"}
+            )
+
+        assert response.status_code == 200
+        assert response.json()["title"] == "New Title"
+
+    def test_archive_conversation(self, authenticated_app_client, timed_request):
+        """Should archive a conversation."""
+        client = authenticated_app_client["client"]
+
+        mock_conv_service = MagicMock()
+        mock_conv_service.get_conversation.return_value = {
+            "id": "conv_123",
+            "studentId": "test-student-123",
+            "userId": "test-student-123",
+            "userRole": "student",
+            "title": "Chat",
+            "status": "active",
+            "messageCount": 0,
+            "createdAt": "2025-01-01T00:00:00",
+            "updatedAt": "2025-01-01T00:00:00",
+            "lastMessagePreview": ""
+        }
+        mock_conv_service.archive_conversation.return_value = {
+            "id": "conv_123",
+            "studentId": "test-student-123",
+            "userId": "test-student-123",
+            "userRole": "student",
+            "title": "Chat",
+            "status": "archived",
+            "messageCount": 0,
+            "createdAt": "2025-01-01T00:00:00",
+            "updatedAt": "2025-01-01T00:00:01",
+            "lastMessagePreview": ""
+        }
+
+        with patch('server.get_conversation_service', return_value=mock_conv_service):
+            response, elapsed = timed_request(
+                client, "PUT", "/api/conversations/conv_123/archive"
+            )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "archived"
+
+
+@pytest.mark.e2e
+class TestChatWithConversationPersistence:
+    """
+    Test that the chat endpoint correctly integrates with conversation persistence.
+    Verifies messages are saved and conversationId is returned.
+    """
+
+    def test_chat_auto_creates_conversation(self, authenticated_app_client, timed_request):
+        """Chat without conversationId should auto-create and return one."""
+        client = authenticated_app_client["client"]
+
+        mock_conv_service = MagicMock()
+        mock_conv_service.create_conversation.return_value = {
+            "id": "auto_conv_1",
+            "studentId": "test-student-123",
+            "userId": "test-student-123",
+            "userRole": "student",
+            "title": "",
+            "status": "active",
+            "messageCount": 0,
+            "createdAt": "2025-01-01T00:00:00",
+            "updatedAt": "2025-01-01T00:00:00",
+            "lastMessagePreview": ""
+        }
+
+        with patch('server.get_chat_service') as mock_get_chat:
+            from services.chat import ChatResponse
+            mock_chat = MagicMock()
+            mock_chat.chat.return_value = ChatResponse(content="Hello!")
+            mock_get_chat.return_value = mock_chat
+
+            with patch('server.get_conversation_service', return_value=mock_conv_service):
+                response, elapsed = timed_request(
+                    client, "POST", "/api/chat/message",
+                    json={
+                        "studentId": "test-student-123",
+                        "message": "Hello",
+                        "chatHistory": []
+                    }
+                )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["conversationId"] == "auto_conv_1"
+
+        # Verify both user and assistant messages were persisted
+        assert mock_conv_service.add_message.call_count == 2
+        user_call = mock_conv_service.add_message.call_args_list[0]
+        assert user_call[0] == ("auto_conv_1", "user", "Hello")
+        assistant_call = mock_conv_service.add_message.call_args_list[1]
+        assert assistant_call[0][0] == "auto_conv_1"
+        assert assistant_call[0][1] == "assistant"
+
+    def test_chat_with_conversation_id_loads_history(self, authenticated_app_client, timed_request):
+        """Chat with conversationId should load history from DB."""
+        client = authenticated_app_client["client"]
+
+        mock_conv_service = MagicMock()
+        mock_conv_service.get_conversation.return_value = {
+            "id": "existing_conv",
+            "studentId": "test-student-123",
+            "userId": "test-student-123",
+            "userRole": "student",
+            "title": "Prior Chat",
+            "status": "active",
+            "messageCount": 2,
+            "createdAt": "2025-01-01T00:00:00",
+            "updatedAt": "2025-01-01T00:00:00",
+            "lastMessagePreview": ""
+        }
+        mock_conv_service.get_messages.return_value = [
+            {"role": "user", "content": "Previous question"},
+            {"role": "assistant", "content": "Previous answer"}
+        ]
+
+        with patch('server.get_chat_service') as mock_get_chat:
+            from services.chat import ChatResponse
+            mock_chat = MagicMock()
+            mock_chat.chat.return_value = ChatResponse(content="Follow up answer")
+            mock_get_chat.return_value = mock_chat
+
+            with patch('server.get_conversation_service', return_value=mock_conv_service):
+                response, elapsed = timed_request(
+                    client, "POST", "/api/chat/message",
+                    json={
+                        "studentId": "test-student-123",
+                        "message": "Follow up",
+                        "conversationId": "existing_conv"
+                    }
+                )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["conversationId"] == "existing_conv"
+
+        # Verify chat service received loaded history
+        chat_call = mock_chat.chat.call_args.kwargs
+        assert len(chat_call["chat_history"]) == 2
+        assert chat_call["chat_history"][0]["content"] == "Previous question"
+
+    def test_chat_with_invalid_conversation_returns_404(self, authenticated_app_client, timed_request):
+        """Chat with nonexistent conversationId should return 404."""
+        client = authenticated_app_client["client"]
+
+        mock_conv_service = MagicMock()
+        mock_conv_service.get_conversation.return_value = None
+
+        with patch('server.get_chat_service') as mock_get_chat:
+            mock_chat = MagicMock()
+            mock_get_chat.return_value = mock_chat
+
+            with patch('server.get_conversation_service', return_value=mock_conv_service):
+                response, elapsed = timed_request(
+                    client, "POST", "/api/chat/message",
+                    json={
+                        "studentId": "test-student-123",
+                        "message": "Hello",
+                        "conversationId": "nonexistent"
+                    }
+                )
+
+        assert response.status_code == 404

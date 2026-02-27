@@ -32,6 +32,7 @@ from services.student import get_student_service
 from services.advisor import get_advisor_service
 from services.prerequisites import get_prerequisite_engine
 from services.chat import get_chat_service
+from services.conversation import get_conversation_service
 
 
 # Pydantic Models (API Response Schemas)
@@ -294,6 +295,7 @@ class ChatMessageRequest(BaseModel):
     studentId: str
     message: str
     chatHistory: List[dict] = []
+    conversationId: Optional[str] = None
 
 
 class ChatCitation(BaseModel):
@@ -319,6 +321,52 @@ class ChatMessageResponse(BaseModel):
     citations: List[ChatCitation] = []
     risks: List[ChatRiskFlag] = []
     nextSteps: List[ChatNextStep] = []
+    conversationId: Optional[str] = None
+
+
+# Conversation Models
+
+class ConversationCreateRequest(BaseModel):
+    studentId: str
+    title: Optional[str] = None
+
+
+class ConversationResponse(BaseModel):
+    id: str
+    studentId: str
+    userId: str
+    userRole: str
+    title: str
+    status: str
+    messageCount: int
+    createdAt: str
+    updatedAt: str
+    lastMessagePreview: Optional[str] = None
+
+
+class ConversationListResponse(BaseModel):
+    conversations: List[ConversationResponse]
+    total: int
+
+
+class ConversationMessageResponse(BaseModel):
+    id: str
+    conversationId: str
+    role: str
+    content: str
+    citations: List[ChatCitation] = []
+    risks: List[ChatRiskFlag] = []
+    nextSteps: List[ChatNextStep] = []
+    createdAt: str
+
+
+class ConversationMessagesResponse(BaseModel):
+    messages: List[ConversationMessageResponse]
+    total: int
+
+
+class ConversationTitleUpdate(BaseModel):
+    title: str
 
 
 # Background Scheduler
@@ -1147,6 +1195,130 @@ async def get_prerequisite_chain(course_code: str):
     return chain
 
 
+# --- Conversation Endpoints ---
+
+@app.post("/api/conversations", response_model=ConversationResponse)
+async def create_conversation(
+    request: ConversationCreateRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Create a new conversation for a student."""
+    if not verify_user_access(current_user, request.studentId):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    conversation_service = get_conversation_service()
+    conversation = conversation_service.create_conversation(
+        user_id=current_user.uid,
+        student_id=request.studentId,
+        user_role=current_user.role.value,
+        title=request.title
+    )
+
+    return ConversationResponse(**conversation)
+
+
+@app.get("/api/student/{user_id}/conversations", response_model=ConversationListResponse)
+async def list_conversations(
+    user_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """List conversations for a student, most recent first."""
+    if not verify_user_access(current_user, user_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    conversation_service = get_conversation_service()
+    conversations = conversation_service.list_conversations(user_id, limit, offset)
+
+    return ConversationListResponse(
+        conversations=[ConversationResponse(**c) for c in conversations],
+        total=len(conversations)
+    )
+
+
+@app.get("/api/conversations/{conversation_id}", response_model=ConversationResponse)
+async def get_conversation(
+    conversation_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Get a single conversation by ID."""
+    conversation_service = get_conversation_service()
+    conversation = conversation_service.get_conversation(conversation_id)
+
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    if not verify_user_access(current_user, conversation["studentId"]):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    return ConversationResponse(**conversation)
+
+
+@app.get("/api/conversations/{conversation_id}/messages", response_model=ConversationMessagesResponse)
+async def get_conversation_messages(
+    conversation_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Get messages for a conversation in chronological order."""
+    conversation_service = get_conversation_service()
+    conversation = conversation_service.get_conversation(conversation_id)
+
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    if not verify_user_access(current_user, conversation["studentId"]):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    messages = conversation_service.get_messages(conversation_id, limit, offset)
+
+    return ConversationMessagesResponse(
+        messages=[ConversationMessageResponse(**m) for m in messages],
+        total=len(messages)
+    )
+
+
+@app.put("/api/conversations/{conversation_id}/title", response_model=ConversationResponse)
+async def update_conversation_title(
+    conversation_id: str,
+    request: ConversationTitleUpdate,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Update a conversation's title."""
+    conversation_service = get_conversation_service()
+    conversation = conversation_service.get_conversation(conversation_id)
+
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    if not verify_user_access(current_user, conversation["studentId"]):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    updated = conversation_service.update_conversation_title(conversation_id, request.title)
+    return ConversationResponse(**updated)
+
+
+@app.put("/api/conversations/{conversation_id}/archive", response_model=ConversationResponse)
+async def archive_conversation(
+    conversation_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user)
+):
+    """Archive a conversation."""
+    conversation_service = get_conversation_service()
+    conversation = conversation_service.get_conversation(conversation_id)
+
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    if not verify_user_access(current_user, conversation["studentId"]):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    updated = conversation_service.archive_conversation(conversation_id)
+    return ConversationResponse(**updated)
+
+
 # --- AI Chat Endpoints ---
 
 @app.post("/api/chat/message", response_model=ChatMessageResponse)
@@ -1176,13 +1348,58 @@ async def chat_message(
         raise HTTPException(status_code=404, detail="Student not found")
 
     try:
+        conversation_service = get_conversation_service()
+        conversation_id = request.conversationId
+
+        # Resolve conversation and chat history
+        if conversation_id:
+            # Persistent mode: load history from DB
+            conversation = conversation_service.get_conversation(conversation_id)
+            if not conversation:
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            if not verify_user_access(current_user, conversation["studentId"]):
+                raise HTTPException(status_code=403, detail="Access denied to conversation")
+
+            stored_messages = conversation_service.get_messages(conversation_id, limit=20)
+            chat_history = [
+                {"role": m["role"], "content": m["content"]}
+                for m in stored_messages
+            ]
+        else:
+            # Auto-create a new conversation
+            conversation = conversation_service.create_conversation(
+                user_id=current_user.uid,
+                student_id=request.studentId,
+                user_role=current_user.role.value
+            )
+            conversation_id = conversation["id"]
+            chat_history = request.chatHistory
+
         chat_service = get_chat_service()
         response = chat_service.chat(
             student_id=request.studentId,
             message=request.message,
-            chat_history=request.chatHistory,
+            chat_history=chat_history,
             user_id=current_user.uid,
             user_role=current_user.role.value
+        )
+
+        # Persist both messages
+        conversation_service.add_message(conversation_id, "user", request.message)
+        conversation_service.add_message(
+            conversation_id, "assistant", response.content,
+            citations=[
+                {"source": c.source, "excerpt": c.excerpt, "relevance": c.relevance}
+                for c in response.citations
+            ],
+            risks=[
+                {"type": r.type, "severity": r.severity, "message": r.message}
+                for r in response.risks
+            ],
+            next_steps=[
+                {"action": n.action, "priority": n.priority, "deadline": n.deadline}
+                for n in response.nextSteps
+            ]
         )
 
         return ChatMessageResponse(
@@ -1210,7 +1427,8 @@ async def chat_message(
                     deadline=n.deadline
                 )
                 for n in response.nextSteps
-            ]
+            ],
+            conversationId=conversation_id
         )
 
     except RuntimeError as e:

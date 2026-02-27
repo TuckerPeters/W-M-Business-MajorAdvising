@@ -130,7 +130,7 @@ class ChatService:
 
     MODEL = "gpt-4o-mini"  # Cost-effective for chat
     MAX_CONTEXT_RESULTS = 5
-    MAX_HISTORY_MESSAGES = 10
+    MAX_HISTORY_MESSAGES = 20
 
     def __init__(self):
         self._openai_client = None
