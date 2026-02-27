@@ -67,16 +67,23 @@ def timed_request(timer):
     """Factory for making timed HTTP requests"""
     def _timed_request(client, method: str, url: str, **kwargs):
         timer.start()
-        if method.upper() == "GET":
+        method_upper = method.upper()
+        if method_upper == "GET":
             response = client.get(url, **kwargs)
-        elif method.upper() == "POST":
+        elif method_upper == "POST":
             response = client.post(url, **kwargs)
-        elif method.upper() == "OPTIONS":
+        elif method_upper == "PUT":
+            response = client.put(url, **kwargs)
+        elif method_upper == "DELETE":
+            response = client.delete(url, **kwargs)
+        elif method_upper == "PATCH":
+            response = client.patch(url, **kwargs)
+        elif method_upper == "OPTIONS":
             response = client.options(url, **kwargs)
         else:
             raise ValueError(f"Unsupported method: {method}")
         elapsed = timer.stop()
-        print(f"\n  [{method.upper()} {url}] {elapsed:.2f}ms - Status: {response.status_code}")
+        print(f"\n  [{method_upper} {url}] {elapsed:.2f}ms - Status: {response.status_code}")
         return response, elapsed
     return _timed_request
 
