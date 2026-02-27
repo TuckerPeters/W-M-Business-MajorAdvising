@@ -161,11 +161,11 @@ class EnrollmentUpdater:
                         "meeting_times_raw": sec.get('meets', ''),
                     })
 
-                # Update only the sections and timestamp
-                batch.update(doc_ref, {
+                # Update only the sections and timestamp (merge=True to handle missing docs)
+                batch.set(doc_ref, {
                     "sections": updated_sections,
                     "enrollment_updated_at": datetime.utcnow().isoformat()
-                })
+                }, merge=True)
 
                 batch_count += 1
                 updated_count += 1
