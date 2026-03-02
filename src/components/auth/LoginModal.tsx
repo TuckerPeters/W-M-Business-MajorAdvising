@@ -313,24 +313,25 @@ export default function LoginModal({ isOpen, onClose, role }: LoginModalProps) {
 
             {/* SSO buttons */}
             {ssoButtons.map((btn) => (
-              <button
-                key={btn.provider}
-                type="button"
-                onClick={() => handleSSO(btn.provider)}
-                className={`w-full flex items-center justify-center gap-3 py-2.5 rounded text-sm font-medium transition-colors ${
-                  btn.recommended
-                    ? 'border-2 border-[#B9975B] text-[#115740] bg-[#f7f5f0] hover:bg-[#eeebe4]'
-                    : 'border border-gray-300 text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                {btn.icon}
-                {btn.label}
+              <div key={btn.provider}>
                 {btn.recommended && (
-                  <span className="text-[10px] uppercase tracking-wider text-[#B9975B] font-semibold ml-1">
+                  <p className="text-[10px] uppercase tracking-wider text-[#B9975B] font-semibold text-center mb-1">
                     Recommended
-                  </span>
+                  </p>
                 )}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleSSO(btn.provider)}
+                  className={`w-full flex items-center justify-center gap-3 py-2.5 rounded text-sm font-medium transition-colors ${
+                    btn.recommended
+                      ? 'border-2 border-[#B9975B] text-[#115740] bg-[#f7f5f0] hover:bg-[#eeebe4]'
+                      : 'border border-gray-300 text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  {btn.icon}
+                  {btn.label}
+                </button>
+              </div>
             ))}
           </form>
         </div>
