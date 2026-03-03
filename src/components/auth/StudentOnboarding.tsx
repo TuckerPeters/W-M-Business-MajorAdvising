@@ -2,12 +2,15 @@
 
 import { useState, useCallback, useMemo } from 'react';
 import { X, ChevronLeft, ChevronRight, Search, Plus, Trash2, Check } from 'lucide-react';
+import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { getAuthInstance } from '@/lib/firebase';
 import Input from '@/components/ui/Input';
 import { searchCourses } from '@/lib/api-client';
 
 interface StudentOnboardingProps {
   studentName: string;
   studentEmail: string;
+  studentPassword?: string;
   onClose: () => void;
   onComplete: () => void;
 }
@@ -248,6 +251,7 @@ const serif = 'Georgia, "Times New Roman", serif';
 export default function StudentOnboarding({
   studentName,
   studentEmail,
+  studentPassword,
   onClose,
   onComplete,
 }: StudentOnboardingProps) {
@@ -384,7 +388,20 @@ export default function StudentOnboarding({
 
   const handleComplete = async () => {
     setSubmitting(true);
-    onComplete();
+    try {
+      // If email/password signup, create the Firebase account now (deferred until onboarding is done)
+      if (studentPassword) {
+        const auth = getAuthInstance();
+        if (auth) {
+          const userCredential = await createUserWithEmailAndPassword(auth, studentEmail, studentPassword);
+          await updateProfile(userCredential.user, { displayName: studentName });
+        }
+      }
+      onComplete();
+    } catch {
+      // Account creation failed — still complete onboarding flow
+      onComplete();
+    }
   };
 
   const examNameList = examTab === 'AP' ? AP_EXAM_NAMES : IB_EXAM_NAMES;
@@ -787,7 +804,7 @@ export default function StudentOnboarding({
                 )}
 
                 {enrolledCourses.length === 0 && (
-                  <div className="text-center py-6 text-sm text-gray-400">Search and add your current courses above, or skip this step.</div>
+                  <div className="text-center py-6 text-sm text-gray-400">Search and add your current courses above to continue.</div>
                 )}
               </div>
             )}
@@ -813,11 +830,11 @@ export default function StudentOnboarding({
             ) : (
               <button
                 onClick={handleComplete}
-                disabled={submitting}
-                className="flex items-center gap-1.5 px-5 py-2 bg-[#B9975B] text-white text-sm font-medium rounded hover:bg-[#a88649] transition-colors disabled:opacity-50"
+                disabled={submitting || enrolledCourses.length === 0}
+                className="flex items-center gap-1.5 px-5 py-2 bg-[#B9975B] text-white text-sm font-medium rounded hover:bg-[#a88649] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {submitting ? 'Setting up...' : 'Complete Setup'}
-                {!submitting && <Check className="h-4 w-4" />}
+                {submitting ? 'Setting up...' : enrolledCourses.length === 0 ? 'Add Current Courses' : 'Complete Setup'}
+                {!submitting && enrolledCourses.length > 0 && <Check className="h-4 w-4" />}
               </button>
             )}
           </div>

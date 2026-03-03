@@ -3,10 +3,49 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { X } from 'lucide-react';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signInWithPopup,
+  updateProfile,
+  getAdditionalUserInfo,
+  deleteUser,
+  AuthError,
+} from 'firebase/auth';
+import { getAuthInstance, googleProvider, microsoftProvider } from '@/lib/firebase';
 import Input from '@/components/ui/Input';
 import PendingApprovalModal from './PendingApprovalModal';
 import StudentOnboarding from './StudentOnboarding';
 import { registerAdvisorAccount, getAdvisorAccountStatus } from '@/lib/advisor-approval-store';
+
+const IS_DEBUG = process.env.NEXT_PUBLIC_DEBUG === 'true';
+
+function getFirebaseErrorMessage(error: AuthError): string {
+  switch (error.code) {
+    case 'auth/invalid-email':
+      return 'Invalid email address.';
+    case 'auth/user-disabled':
+      return 'This account has been disabled.';
+    case 'auth/user-not-found':
+    case 'auth/wrong-password':
+    case 'auth/invalid-credential':
+      return 'Invalid email or password.';
+    case 'auth/email-already-in-use':
+      return 'An account with this email already exists.';
+    case 'auth/weak-password':
+      return 'Password must be at least 6 characters.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please try again later.';
+    case 'auth/popup-closed-by-user':
+      return 'Sign-in popup was closed. Please try again.';
+    case 'auth/popup-blocked':
+      return 'Sign-in popup was blocked. Please allow popups.';
+    case 'auth/account-exists-with-different-credential':
+      return 'An account with this email already exists with a different sign-in method.';
+    default:
+      return 'Authentication failed. Please try again.';
+  }
+}
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -22,9 +61,12 @@ export default function LoginModal({ isOpen, onClose, role }: LoginModalProps) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
   const [showPendingModal, setShowPendingModal] = useState(false);
   const [pendingName, setPendingName] = useState('');
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [ssoName, setSsoName] = useState('');
+  const [ssoEmail, setSsoEmail] = useState('');
 
   if (!isOpen) return null;
 
@@ -39,7 +81,7 @@ export default function LoginModal({ isOpen, onClose, role }: LoginModalProps) {
     return true;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -64,19 +106,35 @@ export default function LoginModal({ isOpen, onClose, role }: LoginModalProps) {
 
       // Advisor account creation → register and show pending modal
       if (role === 'advisor') {
-        registerAdvisorAccount(email, name);
-        setPendingName(name);
-        setShowPendingModal(true);
+        setAuthLoading(true);
+        try {
+          const userCredential = await createUserWithEmailAndPassword(getAuthInstance()!, email, password);
+          await updateProfile(userCredential.user, { displayName: name });
+          registerAdvisorAccount(email, name);
+          setPendingName(name);
+          setShowPendingModal(true);
+        } catch (err) {
+          if (IS_DEBUG) {
+            registerAdvisorAccount(email, name);
+            setPendingName(name);
+            setShowPendingModal(true);
+          } else {
+            setError(getFirebaseErrorMessage(err as AuthError));
+          }
+        } finally {
+          setAuthLoading(false);
+        }
         return;
       }
 
       // Student account creation → validate @wm.edu then show onboarding
+      // Firebase account is created AFTER onboarding completes (in StudentOnboarding)
       if (!validateWmEmail(email)) return;
       setShowOnboarding(true);
       return;
     }
 
-    // Sign in flow — check advisor approval status
+    // Sign in flow — check advisor approval status first
     if (role === 'advisor') {
       const account = getAdvisorAccountStatus(email);
       if (account && account.status === 'pending') {
@@ -84,36 +142,110 @@ export default function LoginModal({ isOpen, onClose, role }: LoginModalProps) {
         setShowPendingModal(true);
         return;
       }
-      // Approved or no account (demo fallthrough) → allow login
     }
 
-    router.push(destination);
+    setAuthLoading(true);
+    try {
+      await signInWithEmailAndPassword(getAuthInstance()!, email, password);
+      router.push(destination);
+    } catch (err) {
+      if (IS_DEBUG) {
+        router.push(destination);
+      } else {
+        setError(getFirebaseErrorMessage(err as AuthError));
+      }
+    } finally {
+      setAuthLoading(false);
+    }
   };
 
-  const handleSSO = (provider: 'google' | 'microsoft' | 'blackboard') => {
+  const handleSSO = async (provider: 'google' | 'microsoft' | 'blackboard') => {
     setError('');
 
-    if (tab === 'create' && role === 'advisor') {
-      registerAdvisorAccount(email || `sso-${Date.now()}@wm.edu`, name || 'Advisor');
-      setPendingName(name || 'Advisor');
-      setShowPendingModal(true);
-      return;
-    }
-
-    // Student create account via SSO
-    if (tab === 'create' && role === 'student') {
-      if (provider === 'blackboard') {
-        // Blackboard has their data — go straight to dashboard
+    // Blackboard: keep as placeholder redirect (not a Firebase provider)
+    if (provider === 'blackboard') {
+      if (tab === 'create' && role === 'student') {
         router.push(destination);
         return;
       }
-      // Google/Microsoft — validate @wm.edu if email entered, then show onboarding
-      if (email && !validateWmEmail(email)) return;
-      setShowOnboarding(true);
+      router.push(destination);
       return;
     }
 
-    router.push(destination);
+    // Advisor create account via SSO
+    if (tab === 'create' && role === 'advisor') {
+      const firebaseProvider = provider === 'google' ? googleProvider : microsoftProvider;
+      setAuthLoading(true);
+      try {
+        const result = await signInWithPopup(getAuthInstance()!, firebaseProvider);
+        const ssoUserName = result.user.displayName || name || 'Advisor';
+        const ssoUserEmail = result.user.email || email || `sso-${Date.now()}@wm.edu`;
+        registerAdvisorAccount(ssoUserEmail, ssoUserName);
+        setPendingName(ssoUserName);
+        setShowPendingModal(true);
+      } catch (err) {
+        if (IS_DEBUG) {
+          registerAdvisorAccount(email || `sso-${Date.now()}@wm.edu`, name || 'Advisor');
+          setPendingName(name || 'Advisor');
+          setShowPendingModal(true);
+        } else {
+          setError(getFirebaseErrorMessage(err as AuthError));
+        }
+      } finally {
+        setAuthLoading(false);
+      }
+      return;
+    }
+
+    // Student create account via SSO or any SSO sign in
+    const firebaseProvider = provider === 'google' ? googleProvider : microsoftProvider;
+    setAuthLoading(true);
+    try {
+      const result = await signInWithPopup(getAuthInstance()!, firebaseProvider);
+
+      // For students: always validate @wm.edu email
+      if (role === 'student') {
+        if (result.user.email && !result.user.email.toLowerCase().endsWith('@wm.edu')) {
+          try {
+            await deleteUser(result.user);
+          } catch (err) {
+            console.error('Error deleting non-wm.edu user:', err);
+            await getAuthInstance()!.signOut();
+          }
+          setError('Please use your W&M email address (@wm.edu).');
+          setAuthLoading(false);
+          return;
+        }
+
+        // Check if this SSO sign-in created a brand new Firebase account
+        const additionalInfo = getAdditionalUserInfo(result);
+        const isNewUser = additionalInfo?.isNewUser ?? false;
+
+        // New user (whether on Create or Sign In tab): show onboarding first
+        if (tab === 'create' || isNewUser) {
+          setSsoName(result.user.displayName || '');
+          setSsoEmail(result.user.email || '');
+          setShowOnboarding(true);
+          setAuthLoading(false);
+          return;
+        }
+      }
+
+      // Sign in flow (existing user): redirect
+      router.push(destination);
+    } catch (err) {
+      if (IS_DEBUG) {
+        if (tab === 'create' && role === 'student') {
+          setShowOnboarding(true);
+        } else {
+          router.push(destination);
+        }
+      } else {
+        setError(getFirebaseErrorMessage(err as AuthError));
+      }
+    } finally {
+      setAuthLoading(false);
+    }
   };
 
   const switchTab = (newTab: 'signin' | 'create') => {
@@ -172,6 +304,10 @@ export default function LoginModal({ isOpen, onClose, role }: LoginModalProps) {
         { provider: 'microsoft' as const, icon: microsoftIcon, label: 'Continue with Microsoft', recommended: false },
         { provider: 'blackboard' as const, icon: blackboardIcon, label: 'Continue with Blackboard', recommended: false },
       ];
+
+  // Determine student name/email for onboarding (form input or SSO-provided)
+  const onboardingName = ssoName || name;
+  const onboardingEmail = ssoEmail || email;
 
   return (
     <>
@@ -299,9 +435,17 @@ export default function LoginModal({ isOpen, onClose, role }: LoginModalProps) {
 
             <button
               type="submit"
-              className="w-full bg-[#115740] text-white py-2.5 rounded text-sm font-medium hover:bg-[#0d4632] transition-colors"
+              disabled={authLoading}
+              className="w-full bg-[#115740] text-white py-2.5 rounded text-sm font-medium hover:bg-[#0d4632] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {tab === 'signin' ? 'Sign In' : 'Create Account'}
+              {authLoading ? (
+                <span className="inline-flex items-center justify-center gap-2">
+                  <span className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
+                  {tab === 'signin' ? 'Signing In...' : 'Creating Account...'}
+                </span>
+              ) : (
+                tab === 'signin' ? 'Sign In' : 'Create Account'
+              )}
             </button>
 
             {/* Divider */}
@@ -321,8 +465,9 @@ export default function LoginModal({ isOpen, onClose, role }: LoginModalProps) {
                 )}
                 <button
                   type="button"
+                  disabled={authLoading}
                   onClick={() => handleSSO(btn.provider)}
-                  className={`w-full flex items-center justify-center gap-3 py-2.5 rounded text-sm font-medium transition-colors ${
+                  className={`w-full flex items-center justify-center gap-3 py-2.5 rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                     btn.recommended
                       ? 'border-2 border-[#B9975B] text-[#115740] bg-[#f7f5f0] hover:bg-[#eeebe4]'
                       : 'border border-gray-300 text-gray-700 hover:bg-gray-50'
@@ -348,9 +493,19 @@ export default function LoginModal({ isOpen, onClose, role }: LoginModalProps) {
 
       {showOnboarding && (
         <StudentOnboarding
-          studentName={name}
-          studentEmail={email}
-          onClose={() => {
+          studentName={onboardingName}
+          studentEmail={onboardingEmail}
+          studentPassword={ssoEmail ? undefined : password}
+          onClose={async () => {
+            // If user signed in via Google SSO but didn't complete onboarding, delete the account
+            const auth = getAuthInstance();
+            if (auth?.currentUser) {
+              try {
+                await deleteUser(auth.currentUser);
+              } catch (err) { //Cleaner than logging out - looping issues
+                console.error('Error deleting user:', err);
+              }
+            }
             setShowOnboarding(false);
             onClose();
           }}

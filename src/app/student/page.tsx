@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useRequireAuth } from '@/lib/use-require-auth';
+import { useAuth } from '@/lib/auth-context';
 import ProgressPanel from '@/components/student/ProgressPanel';
 import CourseList from '@/components/student/CourseList';
 import ChatInterface from '@/components/student/ChatInterface';
@@ -42,6 +44,8 @@ function getInitialTab<T extends string>(validTabs: readonly T[], fallback: T): 
 
 export default function StudentDashboard() {
   const router = useRouter();
+  const { loading: authLoading, isAuthenticated } = useRequireAuth();
+  const { signOut } = useAuth();
 
   const [activeTab, setActiveTab] =
     useState<StudentTab>(() => getInitialTab(VALID_STUDENT_TABS, 'overview'));
@@ -65,6 +69,8 @@ export default function StudentDashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
+
     async function fetchDashboard() {
       try {
         const [profile, progress, termCode] = await Promise.all([
@@ -88,7 +94,7 @@ export default function StudentDashboard() {
     }
 
     fetchDashboard();
-  }, []);
+  }, [isAuthenticated]);
 
   const handleCourseAdded = useCallback(async (course: Course) => {
     const saved = await addPlannedCourse({
@@ -125,13 +131,15 @@ export default function StudentDashboard() {
     }
   }, [activeTab, catalogLoaded, nextTerm]);
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-white">
         <div className="animate-spin h-10 w-10 border-4 border-[#115740] border-t-transparent rounded-full"></div>
       </div>
     );
   }
+
+  if (!isAuthenticated) return null;
 
   return (
     <div className="min-h-screen bg-white">
@@ -175,7 +183,7 @@ export default function StudentDashboard() {
               Home
             </Link>
             <button
-              onClick={() => router.push('/')}
+              onClick={async () => { await signOut(); router.push('/'); }}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-sm text-[#115740] hover:bg-[#115740]/5 rounded transition-colors"
             >
               <LogOut className="h-4 w-4" />

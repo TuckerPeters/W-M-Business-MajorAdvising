@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   GraduationCap,
   Users,
@@ -11,7 +12,10 @@ import {
   Calendar,
   Shield,
   ArrowRight,
+  LogOut,
+  User,
 } from 'lucide-react';
+import { useAuth } from '@/lib/auth-context';
 import LoginModal from '@/components/auth/LoginModal';
 
 const navItems = [
@@ -24,7 +28,13 @@ const navItems = [
 ];
 
 export default function Home() {
+  const { user, loading, signOut } = useAuth();
+  const router = useRouter();
   const [loginRole, setLoginRole] = useState<'student' | 'advisor' | null>(null);
+
+  const handleSignOut = async () => {
+    await signOut();
+  };
 
   return (
     <div className="min-h-screen bg-white">
@@ -48,18 +58,38 @@ export default function Home() {
 
           {/* Right nav */}
           <div className="flex items-center gap-1">
-            <button
-              onClick={() => setLoginRole('student')}
-              className="hidden sm:inline-flex items-center gap-1.5 px-4 py-2 text-sm text-[#115740] hover:bg-[#115740]/5 rounded transition-colors"
-            >
-              Student Login
-            </button>
-            <button
-              onClick={() => setLoginRole('advisor')}
-              className="hidden sm:inline-flex items-center gap-1.5 px-4 py-2 text-sm text-[#115740] hover:bg-[#115740]/5 rounded transition-colors"
-            >
-              Advisor Login
-            </button>
+            {user ? (
+              <>
+                <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 text-sm text-[#115740]">
+                  <User className="h-4 w-4" />
+                  <span style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}>
+                    {user.displayName || user.email?.split('@')[0] || 'User'}
+                  </span>
+                </div>
+                <button
+                  onClick={handleSignOut}
+                  className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Sign Out
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => setLoginRole('student')}
+                  className="hidden sm:inline-flex items-center gap-1.5 px-4 py-2 text-sm text-[#115740] hover:bg-[#115740]/5 rounded transition-colors"
+                >
+                  Student Login
+                </button>
+                <button
+                  onClick={() => setLoginRole('advisor')}
+                  className="hidden sm:inline-flex items-center gap-1.5 px-4 py-2 text-sm text-[#115740] hover:bg-[#115740]/5 rounded transition-colors"
+                >
+                  Advisor Login
+                </button>
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -105,7 +135,7 @@ export default function Home() {
             <nav className="py-2">
               {navItems.map((item) => {
                 const needsLogin = item.label === 'Student Portal' || item.label === 'Advisor Portal';
-                if (needsLogin) {
+                if (needsLogin && !user) {
                   return (
                     <button
                       key={item.label}
@@ -150,7 +180,7 @@ export default function Home() {
 
           {/* Portal cards */}
           <div className="grid sm:grid-cols-2 gap-5 mb-10">
-            <button onClick={() => setLoginRole('student')} className="group text-left">
+            <button onClick={() => user ? router.push('/student') : setLoginRole('student')} className="group text-left">
               <div className="border border-gray-200 rounded bg-white p-6 hover:shadow-lg transition-all duration-200 hover:border-[#115740]/30">
                 <div className="flex items-start gap-4">
                   <div className="w-12 h-12 rounded bg-[#115740] flex items-center justify-center flex-shrink-0">
@@ -175,7 +205,7 @@ export default function Home() {
               </div>
             </button>
 
-            <button onClick={() => setLoginRole('advisor')} className="group text-left">
+            <button onClick={() => user ? router.push('/advisor') : setLoginRole('advisor')} className="group text-left">
               <div className="border border-gray-200 rounded bg-white p-6 hover:shadow-lg transition-all duration-200 hover:border-[#115740]/30">
                 <div className="flex items-start gap-4">
                   <div className="w-12 h-12 rounded bg-[#262626] flex items-center justify-center flex-shrink-0">

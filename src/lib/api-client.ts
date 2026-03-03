@@ -1,18 +1,34 @@
 // Direct calls to Python backend — no Next.js proxy layer
 
+import { getAuthToken, getCurrentUserId } from './firebase';
+
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-const USER_ID = 'demo-student';
-const ADVISOR_ID = 'demo-advisor';
+
+function getStudentId(): string {
+  return getCurrentUserId('demo-student');
+}
+
+function getAdvisorId(): string {
+  return getCurrentUserId('demo-advisor');
+}
 
 async function apiRequest<T>(
   endpoint: string,
   options?: RequestInit
 ): Promise<T> {
   const { headers: extraHeaders, ...restOptions } = options || {};
+
+  const token = await getAuthToken();
+  const authHeaders: Record<string, string> = {};
+  if (token) {
+    authHeaders['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${BACKEND_URL}/api${endpoint}`, {
     ...restOptions,
     headers: {
       "Content-Type": "application/json",
+      ...authHeaders,
       ...((extraHeaders as Record<string, string>) || {}),
     },
   });
@@ -111,7 +127,7 @@ function adaptAssignment(assignment: any) {
 ======================== */
 
 export const getStudentProfile = async () => {
-  const data = await apiRequest<any>(`/student/${USER_ID}/profile`);
+  const data = await apiRequest<any>(`/student/${getStudentId()}/profile`);
   return {
     name: data.name,
     major: data.intendedMajor || 'Undeclared',
@@ -126,8 +142,8 @@ export const getStudentProfile = async () => {
 
 export const getCourseProgress = async () => {
   const [coursesData, milestonesData] = await Promise.all([
-    apiRequest<any>(`/student/${USER_ID}/courses`),
-    apiRequest<any>(`/student/${USER_ID}/milestones`),
+    apiRequest<any>(`/student/${getStudentId()}/courses`),
+    apiRequest<any>(`/student/${getStudentId()}/milestones`),
   ]);
   return {
     currentCourses: (coursesData.current || []).map(adaptEnrollment),
@@ -155,7 +171,7 @@ export const searchCourses = async (query: string) => {
    Advisor Endpoints
 ======================== */
 
-export const getAdvisorProfile = async (advisorId: string = ADVISOR_ID) => {
+export const getAdvisorProfile = async (advisorId: string = getAdvisorId()) => {
   const data = await apiRequest<any>(`/advisor/${advisorId}/profile`);
   return {
     name: data.name,
@@ -165,7 +181,7 @@ export const getAdvisorProfile = async (advisorId: string = ADVISOR_ID) => {
   };
 };
 
-export const getAdvisees = async (advisorId: string = ADVISOR_ID) => {
+export const getAdvisees = async (advisorId: string = getAdvisorId()) => {
   const assignments = await apiRequest<any[]>(`/advisor/${advisorId}/advisees`);
   return (assignments || []).map(adaptAssignment);
 };
@@ -199,12 +215,12 @@ export interface AdvisorAlert {
   createdAt: string;
 }
 
-export const getAdvisorAlerts = async (advisorId: string = ADVISOR_ID) => {
+export const getAdvisorAlerts = async (advisorId: string = getAdvisorId()) => {
   const data = await apiRequest<AdvisorAlert[]>(`/advisor/${advisorId}/alerts`);
   return data || [];
 };
 
-export const assignAdvisee = async (studentId: string, advisorId: string = ADVISOR_ID) => {
+export const assignAdvisee = async (studentId: string, advisorId: string = getAdvisorId()) => {
   const result = await apiRequest<any>(`/advisor/${advisorId}/advisees`, {
     method: "POST",
     body: JSON.stringify({ studentId }),
@@ -212,14 +228,14 @@ export const assignAdvisee = async (studentId: string, advisorId: string = ADVIS
   return adaptAssignment(result);
 };
 
-export const removeAdvisee = async (studentId: string, advisorId: string = ADVISOR_ID) =>
+export const removeAdvisee = async (studentId: string, advisorId: string = getAdvisorId()) =>
   apiRequest<{ success: boolean; message: string }>(`/advisor/${advisorId}/advisees/${studentId}`, {
     method: "DELETE",
   });
 
 const ADVISOR_HEADERS = { "X-User-Role": "advisor" };
 
-export const getAdvisorConversations = async (advisorId: string = ADVISOR_ID) => {
+export const getAdvisorConversations = async (advisorId: string = getAdvisorId()) => {
   const data = await apiRequest<{
     conversations: any[];
     total: number;
@@ -248,7 +264,7 @@ export const sendAdvisorChatMessage = async (message: string, conversationId?: s
     headers: ADVISOR_HEADERS,
     body: JSON.stringify({
       message,
-      studentId: ADVISOR_ID,
+      studentId: getAdvisorId(),
       conversationId: conversationId || undefined,
     }),
   });
@@ -276,7 +292,7 @@ export const getConversations = async () => {
   const data = await apiRequest<{
     conversations: any[];
     total: number;
-  }>(`/student/${USER_ID}/conversations?limit=50`);
+  }>(`/student/${getStudentId()}/conversations?limit=50`);
   return (data.conversations || []).map((c: any): ConversationSummary => ({
     id: c.id,
     title: c.title || 'New conversation',
@@ -346,7 +362,7 @@ export const addPlannedCourse = async (course: {
   building?: string;
   room?: string;
 }) => {
-  const result = await apiRequest<any>(`/student/${USER_ID}/courses`, {
+  const result = await apiRequest<any>(`/student/${getStudentId()}/courses`, {
     method: "POST",
     body: JSON.stringify({
       courseCode: course.courseCode,
@@ -367,7 +383,7 @@ export const addPlannedCourse = async (course: {
 };
 
 export const deletePlannedCourse = async (enrollmentId: string) =>
-  apiRequest<{ success: boolean }>(`/student/${USER_ID}/courses/${enrollmentId}`, {
+  apiRequest<{ success: boolean }>(`/student/${getStudentId()}/courses/${enrollmentId}`, {
     method: "DELETE",
   });
 
@@ -382,7 +398,7 @@ export const deletePlannedCourse = async (enrollmentId: string) =>
 export const createTrackingSession = async (viewportWidth: number, viewportHeight: number) =>
   apiRequest<{ sessionId: string }>("/tracking/sessions", {
     method: "POST",
-    body: JSON.stringify({ userId: USER_ID, viewportWidth, viewportHeight }),
+    body: JSON.stringify({ userId: getStudentId(), viewportWidth, viewportHeight }),
   });
 
 export const saveTrackingSnapshot = async (
@@ -414,7 +430,7 @@ export const sendChatMessage = async (message: string, conversationId?: string |
     method: "POST",
     body: JSON.stringify({
       message,
-      studentId: USER_ID,
+      studentId: getStudentId(),
       conversationId: conversationId || undefined,
     }),
   });

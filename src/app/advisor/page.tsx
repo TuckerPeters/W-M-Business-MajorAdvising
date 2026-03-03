@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useRequireAuth } from '@/lib/use-require-auth';
+import { useAuth } from '@/lib/auth-context';
 import AdviseeList from '@/components/advisor/AdviseeList';
 import AdviseeDetail from '@/components/advisor/AdviseeDetail';
 import AnalyticsDashboard from '@/components/advisor/AnalyticsDashboard';
@@ -60,6 +62,8 @@ const advisorQuickPrompts = [
 
 export default function AdvisorDashboard() {
   const router = useRouter();
+  const { loading: authLoading, isAuthenticated } = useRequireAuth();
+  const { signOut } = useAuth();
 
   const [activeTab, setActiveTab] = useState<AdvisorTab>(() => getInitialTab(VALID_ADVISOR_TABS, 'students'));
 
@@ -78,6 +82,8 @@ export default function AdvisorDashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
+
     async function fetchData() {
       try {
         const [adviseeData, profileData, questionsData, alertsData] = await Promise.allSettled([
@@ -97,7 +103,7 @@ export default function AdvisorDashboard() {
       }
     }
     fetchData();
-  }, []);
+  }, [isAuthenticated]);
 
   const handleAdviseeAdded = useCallback((advisee: Advisee) => {
     setAdvisees(prev => [...prev, advisee]);
@@ -115,13 +121,15 @@ export default function AdvisorDashboard() {
     ? advisees.reduce((sum, a) => sum + a.gpa, 0) / advisees.length
     : 0;
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-white">
         <div className="animate-spin h-10 w-10 border-4 border-[#115740] border-t-transparent rounded-full"></div>
       </div>
     );
   }
+
+  if (!isAuthenticated) return null;
 
   return (
     <div className="min-h-screen bg-white">
@@ -174,7 +182,7 @@ export default function AdvisorDashboard() {
               Home
             </Link>
             <button
-              onClick={() => router.push('/')}
+              onClick={async () => { await signOut(); router.push('/'); }}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-sm text-[#115740] hover:bg-[#115740]/5 rounded transition-colors"
             >
               <LogOut className="h-4 w-4" />

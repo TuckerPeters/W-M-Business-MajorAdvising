@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import DebugOverlay from '@/components/debug/DebugOverlay';
+import Providers from './providers';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -24,7 +25,7 @@ export default function RootLayout({
         />
       </head>
       <body>
-        {children}
+        <Providers>{children}</Providers>
         <DebugOverlay />
       </body>
     </html>
