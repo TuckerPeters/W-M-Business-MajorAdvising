@@ -2,8 +2,13 @@
 Firebase Configuration for W&M Business Major Advising Backend
 
 Uses Firebase Admin SDK for server-side operations with Firestore.
+Supports three initialization methods:
+  1. FIREBASE_SERVICE_ACCOUNT_JSON env var (for Heroku / cloud platforms)
+  2. Service account key file (for local development)
+  3. Default credentials (for GCP environments)
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -36,20 +41,26 @@ def initialize_firebase():
     """
     Initialize Firebase Admin SDK.
 
-    For server-side operations, we use the Admin SDK with default credentials
-    or a service account. The web config above is for reference.
-
-    To use with a service account:
-    1. Go to Firebase Console -> Project Settings -> Service Accounts
-    2. Generate a new private key
-    3. Save it as 'serviceAccountKey.json' in this directory
+    Tries initialization in this order:
+    1. FIREBASE_SERVICE_ACCOUNT_JSON env var (JSON string, for Heroku)
+    2. Service account key file (local development)
+    3. Default credentials with projectId (GCP environments)
     """
     global _db
 
     if _db is not None:
         return _db
 
-    # Build possible paths for service account key
+    # Method 1: Service account JSON from environment variable (Heroku)
+    service_account_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+    if service_account_json:
+        service_account_info = json.loads(service_account_json)
+        cred = credentials.Certificate(service_account_info)
+        firebase_admin.initialize_app(cred)
+        _db = firestore.client()
+        return _db
+
+    # Method 2: Service account key file (local development)
     backend_dir = Path(__file__).parent.parent
     possible_paths = [
         backend_dir / SERVICE_ACCOUNT_PATH,             # backend/key.json
@@ -61,12 +72,13 @@ def initialize_firebase():
         if path.exists():
             cred = credentials.Certificate(str(path))
             firebase_admin.initialize_app(cred)
-            break
-    else:
-        # Initialize with default credentials (for cloud environments)
-        firebase_admin.initialize_app(options={
-            'projectId': FIREBASE_CONFIG['projectId']
-        })
+            _db = firestore.client()
+            return _db
+
+    # Method 3: Default credentials (for GCP environments)
+    firebase_admin.initialize_app(options={
+        'projectId': FIREBASE_CONFIG['projectId']
+    })
 
     _db = firestore.client()
     return _db

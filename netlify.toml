@@ -1,0 +1,36 @@
+# Netlify configuration for Next.js frontend
+# Netlify auto-detects Next.js and uses @netlify/plugin-nextjs
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+# Environment variables (set these in Netlify dashboard, not here)
+# NEXT_PUBLIC_BACKEND_URL = "https://your-app-name.herokuapp.com"
+# NEXT_PUBLIC_API_URL = "https://your-app-name.herokuapp.com"
+# NEXT_PUBLIC_FIREBASE_API_KEY = "..."
+# NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN = "..."
+# NEXT_PUBLIC_FIREBASE_PROJECT_ID = "..."
+# NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET = "..."
+# NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID = "..."
+# NEXT_PUBLIC_FIREBASE_APP_ID = "..."
+
+# Headers for security and CORS
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+# Redirect API calls to Heroku backend (fallback if Next.js API routes aren't used)
+# Uncomment and update the URL once your Heroku app is deployed:
+# [[redirects]]
+#   from = "/api/*"
+#   to = "https://your-app-name.herokuapp.com/api/:splat"
+#   status = 200
+#   force = true
+
+# Next.js plugin (auto-installed by Netlify)
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

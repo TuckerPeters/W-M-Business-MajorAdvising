@@ -699,15 +699,22 @@ app = FastAPI(
 )
 
 # CORS - Allow frontend origins
+_cors_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+]
+# Add production frontend URL from environment variable
+_frontend_url = os.getenv("FRONTEND_URL", "").strip()
+if _frontend_url:
+    _cors_origins.append(_frontend_url)
+    # Also allow without trailing slash
+    _cors_origins.append(_frontend_url.rstrip("/"))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-        # Add your production frontend URL here
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1929,7 +1936,7 @@ def main():
     import uvicorn
 
     parser = argparse.ArgumentParser(description="W&M Course Catalog API Server")
-    parser.add_argument("--port", type=int, default=8000, help="Port to run on")
+    parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "8000")), help="Port to run on")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--no-scheduler", action="store_true", help="Disable background scheduler")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload for development")
