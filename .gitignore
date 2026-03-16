@@ -45,3 +45,6 @@ notes1.txt
 
 #AP Credits Info 
 AP_Credits_Info.pdf 
+
+# Local Netlify folder
+.netlify
