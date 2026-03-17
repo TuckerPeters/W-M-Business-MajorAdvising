@@ -84,7 +84,8 @@ function adaptCatalogCourse(course: any) {
     level: parseInt(parts[1]) || 0,
     hasLab: (course.attributes || []).some((a: string) => /lab/i.test(a)),
     difficultyIndex: 0,
-    prereqs: [],
+    prereqs: course.prerequisites || [],
+    description: course.description || '',
     status: undefined,
     sections: (course.sections || []).map((s: any) => ({
       crn: s.crn || '',
@@ -154,7 +155,7 @@ export const getCourseProgress = async () => {
 };
 
 export const getCourseCatalog = async (term?: string) => {
-  const params = new URLSearchParams({ limit: '100', offset: '0' });
+  const params = new URLSearchParams({ limit: '2000', offset: '0' });
   if (term) params.set('term', term);
   const data = await apiRequest<{ courses: any[] }>(`/courses?${params}`);
   return { courses: (data.courses || []).map(adaptCatalogCourse) };
@@ -343,6 +344,10 @@ export const getNextTermCode = async (): Promise<string> => {
     next_transition: { next_term: string; next_semester: string };
   }>("/term");
   return data.next_transition.next_term;
+};
+
+export const getDegreeRequirements = async () => {
+  return apiRequest<any>("/degree-requirements");
 };
 
 /* ========================

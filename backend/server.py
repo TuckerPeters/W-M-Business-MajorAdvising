@@ -30,7 +30,8 @@ from core.auth import (
     get_current_user,
     get_current_advisor,
     verify_user_access,
-    set_debug_mode
+    set_debug_mode,
+    is_debug_mode,
 )
 from services.firebase import get_course_service
 from services.student import get_student_service
@@ -65,6 +66,7 @@ class CourseResponse(BaseModel):
     description: Optional[str] = ""
     credits: int
     attributes: List[str] = []
+    prerequisites: List[str] = []
     sections: List[SectionResponse] = []
 
 
@@ -417,14 +419,64 @@ DEMO_STUDENT_ID = "demo-student"
 DEMO_ADVISOR_ID = "demo-advisor"
 
 
+DEMO_STUDENTS = [
+    {"id": "demo-student",   "name": "Sarah Chen",       "email": "schen@wm.edu",       "classYear": 2027, "declared": True,  "intendedMajor": "Business Analytics",  "minor": "Computer Science",  "apCredits": 8,  "targetCredits": 42},
+    {"id": "demo-student-2", "name": "Marcus Williams",   "email": "mwilliams@wm.edu",   "classYear": 2027, "declared": True,  "intendedMajor": "Finance",             "minor": None,                "apCredits": 4,  "targetCredits": 48},
+    {"id": "demo-student-3", "name": "Priya Patel",       "email": "ppatel@wm.edu",       "classYear": 2028, "declared": False, "intendedMajor": "Accounting",          "minor": None,                "apCredits": 12, "targetCredits": 28},
+    {"id": "demo-student-4", "name": "James O'Brien",     "email": "jobrien@wm.edu",      "classYear": 2026, "declared": True,  "intendedMajor": "Marketing",           "minor": "Psychology",        "apCredits": 6,  "targetCredits": 90},
+    {"id": "demo-student-5", "name": "Sofia Martinez",    "email": "smartinez@wm.edu",    "classYear": 2028, "declared": False, "intendedMajor": None,                  "minor": None,                "apCredits": 0,  "targetCredits": 15},
+    {"id": "demo-student-6", "name": "Tyler Washington",  "email": "twashington@wm.edu",  "classYear": 2027, "declared": True,  "intendedMajor": "Finance",             "minor": "Economics",         "apCredits": 8,  "targetCredits": 55},
+    {"id": "demo-student-7", "name": "Emma Nguyen",       "email": "enguyen@wm.edu",      "classYear": 2026, "declared": True,  "intendedMajor": "Business Analytics",  "minor": None,                "apCredits": 10, "targetCredits": 100},
+    {"id": "demo-student-8", "name": "David Kim",         "email": "dkim@wm.edu",         "classYear": 2028, "declared": False, "intendedMajor": "Accounting",          "minor": None,                "apCredits": 3,  "targetCredits": 20},
+    {"id": "demo-student-9", "name": "Olivia Jackson",    "email": "ojackson@wm.edu",     "classYear": 2027, "declared": True,  "intendedMajor": "Marketing",           "minor": "Data Science",      "apCredits": 6,  "targetCredits": 60},
+    {"id": "demo-student-10","name": "Aiden Thompson",    "email": "athompson@wm.edu",    "classYear": 2026, "declared": True,  "intendedMajor": "Finance",             "minor": None,                "apCredits": 4,  "targetCredits": 85},
+]
+
+# In-memory fallback data for demo mode (no Firestore writes needed)
+DEMO_ADVISOR_PROFILE = {
+    "userId": DEMO_ADVISOR_ID,
+    "name": "Dr. Emily Rodriguez",
+    "email": "erodriguez@wm.edu",
+    "role": "advisor",
+    "department": "Raymond A. Mason School of Business",
+    "office": "Miller Hall 2040",
+    "phone": "757-221-2900",
+}
+
+_DEMO_PROFILES = {s["id"]: {
+    "userId": s["id"], "name": s["name"], "email": s["email"],
+    "classYear": s["classYear"], "gpa": 3.72 if s["id"] == "demo-student" else round(2.5 + hash(s["id"]) % 15 / 10, 2),
+    "creditsEarned": s["targetCredits"], "declared": s["declared"],
+    "intendedMajor": s["intendedMajor"], "apCredits": s["apCredits"],
+    "holds": [], "minor": s["minor"], "advisorId": DEMO_ADVISOR_ID,
+} for s in DEMO_STUDENTS}
+
+def _get_demo_profile(user_id: str):
+    """Return in-memory demo student profile, or None if not a demo student."""
+    return _DEMO_PROFILES.get(user_id)
+
+
 def _seed_debug_data():
-    """Create demo student and advisor profiles for debug mode."""
+    """Create demo student and advisor profiles for debug mode.
+    Skips seeding if demo data already exists in Firestore.
+    Uses Firestore batch writes (max 500 ops each) to stay within quota."""
     import random
+    import time as _time
     from datetime import datetime
 
     db = get_firestore_client()
 
-    # Pull real courses from the database
+    # Check if demo data already exists — skip seeding if so
+    try:
+        existing = db.collection("students").document(DEMO_STUDENT_ID).get()
+        if existing.exists:
+            print("[Debug] Demo data already exists in Firestore — skipping seed")
+            return
+    except Exception as e:
+        print(f"[Debug] Firestore check failed ({e}), skipping seed — in-memory fallbacks will be used")
+        return
+
+    # Pull real courses from the database (limit to keep reads low)
     all_courses = []
     course_docs = db.collection("courses").limit(200).stream()
     for doc in course_docs:
@@ -433,169 +485,32 @@ def _seed_debug_data():
             all_courses.append(data)
 
     if all_courses:
-        random.shuffle(all_courses)
-        print(f"[Debug] Found {len(all_courses)} courses in database, selecting random enrollments")
+        print(f"[Debug] Found {len(all_courses)} courses in database")
     else:
-        print("[Debug] No courses in database, using placeholder enrollments")
+        print("[Debug] No courses in database, demo students will have no enrollments")
 
-    # Demo student - fully filled out for proper testing
-    student_ref = db.collection("students").document(DEMO_STUDENT_ID)
-    student_ref.set({
-        "userId": DEMO_STUDENT_ID,
-        "name": "Sarah Chen",
-        "email": "schen@wm.edu",
-        "classYear": 2027,
-        "gpa": 3.65,
-        "creditsEarned": 42,
-        "declared": True,
-        "intendedMajor": "Business Analytics",
-        "apCredits": 8,
-        "holds": [],
-        "minor": "Computer Science",
-        "phone": "757-555-0142",
-        "advisorId": DEMO_ADVISOR_ID,
-        "createdAt": datetime.utcnow().isoformat(),
-        "updatedAt": datetime.utcnow().isoformat(),
-    })
-    print("[Debug] Created demo student: Sarah Chen (demo-student)")
-
-    # Build enrollments from real courses or fallback
-    grades = ["A", "A-", "B+", "B", "B-", "A"]
-    enrollments = []
-
-    if all_courses:
-        # Build completed list targeting ~42 credits (realistic for class of 2027)
-        completed = []
-        completed_credits = 0
-        idx = 0
-        while idx < len(all_courses) and completed_credits < 42:
-            c = all_courses[idx]
-            cr = c.get("credits", 3)
-            if completed_credits + cr <= 45:
-                completed.append(c)
-                completed_credits += cr
-            idx += 1
-
-        # Build enrolled list: between 12 and 18 credits
-        enrolled = []
-        enrolled_credits = 0
-        while idx < len(all_courses):
-            c = all_courses[idx]
-            cr = c.get("credits", 3)
-            if enrolled_credits + cr > 18:
-                idx += 1
-                continue
-            enrolled.append(c)
-            enrolled_credits += cr
-            idx += 1
-            if enrolled_credits >= 15:
-                break
-        # If we didn't reach 12 credits, keep adding
-        while idx < len(all_courses) and enrolled_credits < 12:
-            c = all_courses[idx]
-            cr = c.get("credits", 3)
-            if enrolled_credits + cr <= 18:
-                enrolled.append(c)
-                enrolled_credits += cr
-            idx += 1
-
-        # 2 planned courses from whatever's left
-        planned = all_courses[idx:idx + 2] if idx < len(all_courses) else []
-
-        for c in completed:
-            enrollments.append({
-                "courseCode": c["course_code"],
-                "courseName": c["title"],
-                "term": "202501",
-                "status": "completed",
-                "grade": random.choice(grades),
-                "credits": c.get("credits", 3),
-            })
-        for c in enrolled:
-            # Pick a random section from the course
-            sections = c.get("sections", [])
-            section = random.choice(sections) if sections else {}
-            meeting = parse_meeting_times_raw(section.get("meeting_times_raw", ""))
-            enrollments.append({
-                "courseCode": c["course_code"],
-                "courseName": c["title"],
-                "term": "202602",
-                "status": "enrolled",
-                "grade": None,
-                "credits": c.get("credits", 3),
-                "sectionNumber": section.get("section_number", ""),
-                "crn": section.get("crn", ""),
-                "instructor": section.get("instructor", ""),
-                "meeting_days": meeting["days"],
-                "meeting_time": meeting["time"],
-                "building": section.get("building", ""),
-                "room": section.get("room", ""),
-            })
-        for c in planned:
-            enrollments.append({
-                "courseCode": c["course_code"],
-                "courseName": c["title"],
-                "term": "202609",
-                "status": "planned",
-                "grade": None,
-                "credits": c.get("credits", 3),
-            })
-    else:
-        print("[Debug] No courses found in DB — demo student will have no enrollments")
-
-    # Calculate creditsEarned and GPA from completed courses
     grade_points = {
         "A": 4.0, "A-": 3.7, "B+": 3.3, "B": 3.0, "B-": 2.7,
         "C+": 2.3, "C": 2.0, "C-": 1.7, "D+": 1.3, "D": 1.0, "F": 0.0,
     }
-    completed_enrollments = [e for e in enrollments if e["status"] == "completed" and e.get("grade")]
-    credits_earned = sum(e["credits"] for e in completed_enrollments)
-    total_quality_points = sum(
-        grade_points.get(e["grade"], 0.0) * e["credits"]
-        for e in completed_enrollments
-    )
-    gpa = round(total_quality_points / credits_earned, 2) if credits_earned > 0 else 0.0
-    student_ref.update({"creditsEarned": credits_earned, "gpa": gpa})
+    now = datetime.utcnow().isoformat()
 
-    for enrollment in enrollments:
-        doc_ref = db.collection("enrollments").document()
-        doc_ref.set({
-            "studentId": DEMO_STUDENT_ID,
-            **enrollment,
-            "createdAt": datetime.utcnow().isoformat(),
-            "updatedAt": datetime.utcnow().isoformat(),
-        })
-    print(f"[Debug] Created {len(enrollments)} demo enrollments ({credits_earned} credits earned)")
+    # Collect all writes, then flush in batches of 450 (under 500 limit)
+    pending_writes = []  # list of (doc_ref, data_dict)
 
-    # Clear any existing milestones for demo student first
-    old_milestones = db.collection("milestones").where("studentId", "==", DEMO_STUDENT_ID).stream()
-    for doc in old_milestones:
-        doc.reference.delete()
+    def flush_writes():
+        """Commit pending writes in Firestore batches of 450."""
+        for i in range(0, len(pending_writes), 450):
+            batch = db.batch()
+            for ref, data in pending_writes[i:i + 450]:
+                batch.set(ref, data, merge=True)
+            batch.commit()
+            if i + 450 < len(pending_writes):
+                _time.sleep(0.5)  # brief pause between batches
+        pending_writes.clear()
 
-    # Demo milestones — dynamically based on actual credits and courses
-    completed_codes = {e["courseCode"] for e in enrollments if e["status"] == "completed"}
-    core_courses = {"BUAD 201", "BUAD 202", "BUAD 231", "BUAD 310", "BUAD 302", "ECON 101", "ECON 102"}
-    core_done = core_courses.issubset(completed_codes)
-    has_39 = credits_earned >= 39
-    milestones = [
-        {"title": "Complete Business Core", "description": "BUAD 201, 202, 231, 310, 302, and ECON 101, 102", "completed": core_done, "order": 0, **({"completedAt": "2025-12-15"} if core_done else {})},
-        {"title": "Complete 39 Credits", "description": "Minimum credits to declare major", "completed": has_39, "order": 1, **({"completedAt": "2025-12-15"} if has_39 else {})},
-        {"title": "Declare Major", "description": "Must declare before earning 54 credits", "completed": has_39, "order": 2, **({"completedAt": "2026-01-20"} if has_39 else {})},
-        {"title": "Complete 120 Credits", "description": "Total credits required for graduation", "completed": False, "order": 3, "credits": {"current": credits_earned, "required": 120}},
-    ]
-    for milestone in milestones:
-        doc_ref = db.collection("milestones").document()
-        doc_ref.set({
-            "studentId": DEMO_STUDENT_ID,
-            "type": "degree",
-            **milestone,
-            "createdAt": datetime.utcnow().isoformat(),
-        })
-    print(f"[Debug] Created {len(milestones)} demo milestones")
-
-    # Demo advisor
-    advisor_ref = db.collection("students").document(DEMO_ADVISOR_ID)
-    advisor_ref.set({
+    # --- Demo advisor (create first so assignments reference it) ---
+    pending_writes.append((db.collection("students").document(DEMO_ADVISOR_ID), {
         "userId": DEMO_ADVISOR_ID,
         "name": "Dr. Emily Rodriguez",
         "email": "erodriguez@wm.edu",
@@ -603,47 +518,146 @@ def _seed_debug_data():
         "department": "Raymond A. Mason School of Business",
         "office": "Miller Hall 2040",
         "phone": "757-221-2900",
-        "createdAt": datetime.utcnow().isoformat(),
-        "updatedAt": datetime.utcnow().isoformat(),
-    })
-    print("[Debug] Created demo advisor: Dr. Emily Rodriguez (demo-advisor)")
+        "createdAt": now,
+        "updatedAt": now,
+    }))
 
-    # Assign advisor to student
-    assignment_ref = db.collection("advisor_assignments").document(f"{DEMO_ADVISOR_ID}_{DEMO_STUDENT_ID}")
-    assignment_ref.set({
-        "advisorId": DEMO_ADVISOR_ID,
-        "studentId": DEMO_STUDENT_ID,
-        "assignedDate": datetime.utcnow().isoformat(),
-    })
-    print("[Debug] Assigned demo advisor to demo student")
+    # --- Create each demo student ---
+    for student_info in DEMO_STUDENTS:
+        sid = student_info["id"]
+        target_credits = student_info["targetCredits"]
+
+        # Grade pool varies by student to create GPA diversity
+        if target_credits >= 85:
+            grade_pool = ["A", "A-", "A", "B+", "A-", "B+"]
+        elif target_credits >= 50:
+            grade_pool = ["A-", "B+", "B", "B+", "A-", "B"]
+        elif target_credits >= 30:
+            grade_pool = ["B+", "B", "B-", "A-", "B", "C+"]
+        else:
+            grade_pool = ["A", "B+", "B", "A-", "B+", "A"]
+
+        # Risk-triggering GPAs for some students
+        if sid == "demo-student-5":
+            grade_pool = ["C+", "C", "C-", "B-", "C", "D+"]
+        elif sid == "demo-student-8":
+            grade_pool = ["B-", "C+", "C", "B", "C+", "C"]
+
+        # Build enrollments from shuffled courses
+        enrollments = []
+        if all_courses:
+            shuffled = list(all_courses)
+            random.shuffle(shuffled)
+
+            completed, completed_credits, idx = [], 0, 0
+            while idx < len(shuffled) and completed_credits < target_credits:
+                c = shuffled[idx]
+                cr = c.get("credits", 3)
+                if completed_credits + cr <= target_credits + 3:
+                    completed.append(c)
+                    completed_credits += cr
+                idx += 1
+
+            enrolled, enrolled_credits = [], 0
+            while idx < len(shuffled) and enrolled_credits < 15:
+                c = shuffled[idx]
+                cr = c.get("credits", 3)
+                if enrolled_credits + cr <= 18:
+                    enrolled.append(c)
+                    enrolled_credits += cr
+                idx += 1
+
+            planned = shuffled[idx:idx + 2] if idx < len(shuffled) else []
+
+            for c in completed:
+                enrollments.append({"courseCode": c["course_code"], "courseName": c["title"], "term": "202501", "status": "completed", "grade": random.choice(grade_pool), "credits": c.get("credits", 3)})
+            for c in enrolled:
+                sections = c.get("sections", [])
+                section = random.choice(sections) if sections else {}
+                meeting = parse_meeting_times_raw(section.get("meeting_times_raw", ""))
+                enrollments.append({"courseCode": c["course_code"], "courseName": c["title"], "term": "202602", "status": "enrolled", "grade": None, "credits": c.get("credits", 3), "sectionNumber": section.get("section_number", ""), "crn": section.get("crn", ""), "instructor": section.get("instructor", ""), "meeting_days": meeting["days"], "meeting_time": meeting["time"], "building": section.get("building", ""), "room": section.get("room", "")})
+            for c in planned:
+                enrollments.append({"courseCode": c["course_code"], "courseName": c["title"], "term": "202609", "status": "planned", "grade": None, "credits": c.get("credits", 3)})
+
+        # Calculate GPA
+        completed_enrollments = [e for e in enrollments if e["status"] == "completed" and e.get("grade")]
+        credits_earned = sum(e["credits"] for e in completed_enrollments)
+        total_qp = sum(grade_points.get(e["grade"], 0.0) * e["credits"] for e in completed_enrollments)
+        gpa = round(total_qp / credits_earned, 2) if credits_earned > 0 else 0.0
+
+        # Student profile
+        pending_writes.append((db.collection("students").document(sid), {
+            "userId": sid,
+            "name": student_info["name"],
+            "email": student_info["email"],
+            "classYear": student_info["classYear"],
+            "gpa": gpa,
+            "creditsEarned": credits_earned,
+            "declared": student_info["declared"],
+            "intendedMajor": student_info["intendedMajor"],
+            "apCredits": student_info["apCredits"],
+            "holds": [],
+            "minor": student_info["minor"],
+            "phone": f"757-555-{random.randint(1000, 9999)}",
+            "advisorId": DEMO_ADVISOR_ID,
+            "createdAt": now,
+            "updatedAt": now,
+        }))
+
+        # Enrollments
+        for enrollment in enrollments:
+            pending_writes.append((db.collection("enrollments").document(), {
+                "studentId": sid, **enrollment, "createdAt": now, "updatedAt": now,
+            }))
+
+        # Milestones
+        completed_codes = {e["courseCode"] for e in enrollments if e["status"] == "completed"}
+        core_courses = {"BUAD 201", "BUAD 202", "BUAD 231", "BUAD 310", "BUAD 302", "ECON 101", "ECON 102"}
+        core_done = core_courses.issubset(completed_codes)
+        has_39 = credits_earned >= 39
+        for milestone in [
+            {"title": "Complete Business Core", "description": "BUAD 201, 202, 231, 310, 302, and ECON 101, 102", "completed": core_done, "order": 0, **({"completedAt": "2025-12-15"} if core_done else {})},
+            {"title": "Complete 39 Credits", "description": "Minimum credits to declare major", "completed": has_39, "order": 1, **({"completedAt": "2025-12-15"} if has_39 else {})},
+            {"title": "Declare Major", "description": "Must declare before earning 54 credits", "completed": student_info["declared"], "order": 2, **({"completedAt": "2026-01-20"} if student_info["declared"] else {})},
+            {"title": "Complete 120 Credits", "description": "Total credits required for graduation", "completed": False, "order": 3, "credits": {"current": credits_earned, "required": 120}},
+        ]:
+            pending_writes.append((db.collection("milestones").document(), {
+                "studentId": sid, "type": "degree", **milestone, "createdAt": now,
+            }))
+
+        # Advisor assignment
+        pending_writes.append((db.collection("advisor_assignments").document(f"{DEMO_ADVISOR_ID}_{sid}"), {
+            "advisorId": DEMO_ADVISOR_ID, "studentId": sid, "assignedDate": now,
+        }))
+
+        print(f"[Debug] Prepared {student_info['name']} ({sid}) — {credits_earned}cr, {gpa} GPA, {len(enrollments)} enrollments")
+
+    # Flush all writes in batches
+    print(f"[Debug] Flushing {len(pending_writes)} writes to Firestore...")
+    flush_writes()
+    print(f"[Debug] Done — created demo advisor + {len(DEMO_STUDENTS)} demo students")
 
 
 def _cleanup_debug_data():
-    """Remove demo student, advisor, enrollments, milestones, and assignment on shutdown."""
+    """Remove all demo students, advisor, enrollments, milestones, and assignments on shutdown."""
     db = get_firestore_client()
 
-    # Clean up enrollments
-    enrollments = db.collection("enrollments").where("studentId", "==", DEMO_STUDENT_ID).stream()
-    for doc in enrollments:
-        doc.reference.delete()
+    for student_info in DEMO_STUDENTS:
+        sid = student_info["id"]
 
-    # Clean up milestones
-    milestones = db.collection("milestones").where("studentId", "==", DEMO_STUDENT_ID).stream()
-    for doc in milestones:
-        doc.reference.delete()
+        for doc in db.collection("enrollments").where("studentId", "==", sid).stream():
+            doc.reference.delete()
+        for doc in db.collection("milestones").where("studentId", "==", sid).stream():
+            doc.reference.delete()
+        for conv in db.collection("conversations").where("studentId", "==", sid).stream():
+            for msg in db.collection("conversation_messages").where("conversationId", "==", conv.id).stream():
+                msg.reference.delete()
+            conv.reference.delete()
+        db.collection("students").document(sid).delete()
+        db.collection("advisor_assignments").document(f"{DEMO_ADVISOR_ID}_{sid}").delete()
 
-    # Clean up conversations and messages
-    conversations = db.collection("conversations").where("studentId", "==", DEMO_STUDENT_ID).stream()
-    for conv in conversations:
-        messages = db.collection("conversation_messages").where("conversationId", "==", conv.id).stream()
-        for msg in messages:
-            msg.reference.delete()
-        conv.reference.delete()
-
-    db.collection("students").document(DEMO_STUDENT_ID).delete()
     db.collection("students").document(DEMO_ADVISOR_ID).delete()
-    db.collection("advisor_assignments").document(f"{DEMO_ADVISOR_ID}_{DEMO_STUDENT_ID}").delete()
-    print("[Debug] Cleaned up all demo data")
+    print(f"[Debug] Cleaned up all demo data ({len(DEMO_STUDENTS)} students + advisor)")
 
 
 # App Lifespan (startup/shutdown)
@@ -674,10 +688,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown
-    if getattr(app.state, 'debug_mode', False):
-        print("[Server] Debug mode: cleaning up demo data...")
-        _cleanup_debug_data()
+    # Shutdown — skip cleanup so demo data persists across restarts
+    # _cleanup_debug_data() is available but disabled to avoid quota issues
 
     if scheduler_task:
         print("[Server] Stopping scheduler...")
@@ -702,8 +714,10 @@ app = FastAPI(
 # CORS - Allow frontend origins
 _cors_origins = [
     "http://localhost:3000",
+    "http://localhost:3001",
     "http://localhost:5173",
     "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
     "http://127.0.0.1:5173",
 ]
 # Add production frontend URL from environment variable
@@ -721,9 +735,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Defaults
+# Defaults — also honor DEMO_MODE env var for deployments using uvicorn directly
 app.state.enable_scheduler = True
-app.state.debug_mode = False
+app.state.debug_mode = os.getenv("DEMO_MODE", "").lower() in ("true", "1")
 app.state.debug_tracking = False
 
 
@@ -771,7 +785,7 @@ async def api_health():
 async def list_courses(
     subject: Optional[str] = Query(None, description="Filter by subject code (e.g., CSCI)"),
     term: Optional[str] = Query(None, description="Term code (e.g., 202620). Defaults to current trackable term."),
-    limit: int = Query(100, ge=1, le=500, description="Max courses to return"),
+    limit: int = Query(500, ge=1, le=2000, description="Max courses to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination")
 ):
     """
@@ -945,7 +959,15 @@ async def get_student_profile(
     student = service.get_student(user_id)
 
     if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
+        # In demo mode, serve from in-memory fallback
+        if is_debug_mode():
+            student = _get_demo_profile(user_id)
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found")
+
+    # In demo mode, show a strong GPA for the demo student
+    if is_debug_mode() and user_id == DEMO_STUDENT_ID:
+        student["gpa"] = 3.72
 
     return StudentProfile(**student)
 
@@ -1032,9 +1054,21 @@ async def get_student_courses(
 
     student = service.get_student(user_id)
     if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
+        if is_debug_mode() and _get_demo_profile(user_id):
+            student = _get_demo_profile(user_id)
+        else:
+            raise HTTPException(status_code=404, detail="Student not found")
 
     courses = service.get_student_courses(user_id)
+
+    # In demo mode, boost the demo student's grades for a better demo presentation
+    if is_debug_mode() and user_id == DEMO_STUDENT_ID:
+        import random as _rng
+        _good = ["A", "A", "A-", "A-", "A", "B+", "A-", "A"]
+        _rng.seed(42)  # deterministic so grades don't change on refresh
+        for e in courses["completed"]:
+            if e.get("grade"):
+                e["grade"] = _rng.choice(_good)
 
     return StudentCoursesResponse(
         completed=[EnrollmentRecord(**e) for e in courses["completed"]],
@@ -1124,10 +1158,23 @@ async def get_student_milestones(
     service = get_student_service()
 
     student = service.get_student(user_id)
+    if not student and is_debug_mode():
+        student = _get_demo_profile(user_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
     milestones = service.get_milestones(user_id)
+
+    # In demo mode, return default milestones if Firestore is empty
+    if not milestones and is_debug_mode() and _get_demo_profile(user_id):
+        cr = _get_demo_profile(user_id).get("creditsEarned", 0)
+        declared = _get_demo_profile(user_id).get("declared", False)
+        milestones = [
+            {"id": f"{user_id}-m0", "studentId": user_id, "type": "degree", "title": "Complete Business Core", "description": "BUAD 201, 202, 231, 310, 302, and ECON 101, 102", "completed": cr >= 39, "order": 0},
+            {"id": f"{user_id}-m1", "studentId": user_id, "type": "degree", "title": "Complete 39 Credits", "description": "Minimum credits to declare major", "completed": cr >= 39, "order": 1},
+            {"id": f"{user_id}-m2", "studentId": user_id, "type": "degree", "title": "Declare Major", "description": "Must declare before earning 54 credits", "completed": declared, "order": 2},
+            {"id": f"{user_id}-m3", "studentId": user_id, "type": "degree", "title": "Complete 120 Credits", "description": "Total credits required for graduation", "completed": False, "order": 3, "credits": {"current": cr, "required": 120}},
+        ]
 
     return [Milestone(**m) for m in milestones]
 
@@ -1180,6 +1227,9 @@ async def get_advisor_profile(
     db = get_firestore_client()
     doc = db.collection("students").document(advisor_id).get()
     if not doc.exists:
+        # In debug mode, return in-memory fallback for the demo advisor
+        if is_debug_mode() and advisor_id == DEMO_ADVISOR_ID:
+            return {"id": advisor_id, **{k: v for k, v in DEMO_ADVISOR_PROFILE.items() if k != "userId"}}
         raise HTTPException(status_code=404, detail="Advisor not found")
 
     data = doc.to_dict()
@@ -1205,6 +1255,26 @@ async def get_advisees(
 
     service = get_advisor_service()
     advisees = service.get_advisees(advisor_id)
+
+    # In demo mode, if Firestore has no assignments, serve all demo students
+    if not advisees and is_debug_mode() and advisor_id == DEMO_ADVISOR_ID:
+        from datetime import datetime
+        advisees = []
+        for s in DEMO_STUDENTS:
+            profile = _DEMO_PROFILES[s["id"]]
+            advisees.append(AdvisorAssignment(
+                id=f"{DEMO_ADVISOR_ID}_{s['id']}",
+                advisorId=DEMO_ADVISOR_ID,
+                studentId=s["id"],
+                assignedDate=datetime.utcnow().isoformat(),
+                student=StudentProfile(
+                    id=s["id"], userId=s["id"], name=s["name"], email=s["email"],
+                    classYear=s["classYear"], gpa=profile["gpa"],
+                    creditsEarned=profile["creditsEarned"], declared=s["declared"],
+                    intendedMajor=s["intendedMajor"], apCredits=s["apCredits"],
+                    holds=[],
+                ),
+            ))
 
     return advisees
 
@@ -1492,6 +1562,113 @@ async def get_eligible_courses(
     eligible = engine.get_eligible_courses(user_id)
 
     return [EligibleCourseResponse(**course) for course in eligible]
+
+
+@app.get("/api/degree-requirements")
+async def get_degree_requirements():
+    """Return structured degree requirements for the Mason School of Business."""
+    from scrapers.curriculum_scraper import load_curriculum_data
+    data = load_curriculum_data()
+    if data:
+        return data
+    # Fallback: return hardcoded structure from prerequisite engine
+    engine = get_prerequisite_engine()
+    return {
+        "prerequisites": {
+            "name": "Prerequisites for Admission to Business Major",
+            "courses": [
+                {"code": "ECON 101", "title": "Principles of Microeconomics", "credits": 3},
+                {"code": "ECON 102", "title": "Principles of Macroeconomics", "credits": 3},
+                {"code": "MATH 108", "title": "Calculus for the Social Sciences (or MATH 111/131)", "credits": 3},
+                {"code": "BUAD 203", "title": "Introduction to Accounting", "credits": 3},
+                {"code": "BUAD 231", "title": "Business Statistics", "credits": 3},
+            ],
+        },
+        "core_curriculum": [
+            {
+                "name": "Foundation Semester — Integrated Core",
+                "courses": [
+                    {"code": "BUAD 300", "title": "Business Communication I", "credits": 1},
+                    {"code": "BUAD 311", "title": "Financial Management", "credits": 3},
+                    {"code": "BUAD 323", "title": "Management of Organizations", "credits": 3},
+                    {"code": "BUAD 330", "title": "Business Communication II", "credits": 1},
+                    {"code": "BUAD 350", "title": "Marketing Management", "credits": 3},
+                ],
+            },
+            {
+                "name": "Upper Level Core",
+                "courses": [
+                    {"code": "BUAD 317", "title": "Operations Management", "credits": 3},
+                    {"code": "BUAD 343", "title": "Business Law", "credits": 2},
+                    {"code": "BUAD 351", "title": "Marketing Analytics", "credits": 1.5},
+                    {"code": "BUAD 352", "title": "Marketing Communication", "credits": 1.5},
+                    {"code": "BUAD 414", "title": "Strategic Management", "credits": 3},
+                ],
+            },
+        ],
+        "majors": [
+            {
+                "name": "Accounting", "credits_required": 15,
+                "required_courses": [
+                    {"code": "BUAD 301", "title": "Intermediate Financial Accounting I", "credits": 3},
+                    {"code": "BUAD 302", "title": "Intermediate Financial Accounting II", "credits": 3},
+                    {"code": "BUAD 303", "title": "Cost Accounting", "credits": 3},
+                    {"code": "BUAD 404", "title": "Auditing", "credits": 3},
+                    {"code": "BUAD 405", "title": "Federal Tax", "credits": 3},
+                ],
+                "elective_courses": [
+                    {"code": "BUAD 304", "title": "Accounting Information Systems", "credits": 3},
+                    {"code": "BUAD 305", "title": "Advanced Accounting", "credits": 3},
+                    {"code": "BUAD 306", "title": "Forensic Accounting", "credits": 3},
+                ],
+                "electives_required": 1,
+            },
+            {
+                "name": "Business Analytics — Data Science", "credits_required": 12,
+                "required_courses": [
+                    {"code": "BUAD 466", "title": "Business Analytics I", "credits": 3},
+                    {"code": "BUAD 467", "title": "Business Analytics II", "credits": 3},
+                    {"code": "BUAD 468", "title": "Business Analytics III", "credits": 3},
+                ],
+                "elective_courses": [
+                    {"code": "BUAD 461", "title": "Supply Chain Analytics", "credits": 3},
+                    {"code": "BUAD 463", "title": "Operations Analytics", "credits": 3},
+                ],
+                "electives_required": 1,
+            },
+            {
+                "name": "Finance", "credits_required": 13,
+                "required_courses": [
+                    {"code": "BUAD 327", "title": "Investments", "credits": 3},
+                    {"code": "BUAD 329", "title": "Corporate Finance", "credits": 4},
+                ],
+                "elective_courses": [
+                    {"code": "BUAD 422", "title": "Financial Modeling", "credits": 3},
+                    {"code": "BUAD 423", "title": "Derivatives", "credits": 3},
+                    {"code": "BUAD 424", "title": "Fixed Income", "credits": 3},
+                    {"code": "BUAD 427", "title": "Advanced Corporate Finance", "credits": 3},
+                ],
+                "electives_required": 2,
+            },
+            {
+                "name": "Marketing", "credits_required": 12,
+                "required_courses": [
+                    {"code": "BUAD 452", "title": "Consumer Behavior", "credits": 3},
+                    {"code": "BUAD 446", "title": "Marketing Research", "credits": 3},
+                ],
+                "elective_courses": [
+                    {"code": "BUAD 445", "title": "Digital Marketing", "credits": 3},
+                    {"code": "BUAD 448", "title": "Brand Management", "credits": 3},
+                    {"code": "BUAD 450", "title": "Sales Management", "credits": 3},
+                    {"code": "BUAD 451", "title": "Product Management", "credits": 3},
+                    {"code": "BUAD 453", "title": "Retail Management", "credits": 3},
+                    {"code": "BUAD 456", "title": "International Marketing", "credits": 3},
+                ],
+                "electives_required": 2,
+            },
+        ],
+        "total_credits_required": 120,
+    }
 
 
 @app.get("/api/courses/{course_code}/prerequisites", response_model=PrerequisiteInfoResponse)
@@ -1851,6 +2028,7 @@ def _format_course(data: dict) -> CourseResponse:
         description=data.get("description", ""),
         credits=data.get("credits", 0),
         attributes=data.get("attributes", []),
+        prerequisites=data.get("prerequisites", []),
         sections=sections
     )
 

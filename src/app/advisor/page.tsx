@@ -30,12 +30,12 @@ import {
   MessageSquare,
   LogOut,
   ArrowLeft,
-  Menu,
-  X,
   BarChart3,
   UserCog,
   Shield,
 } from 'lucide-react';
+
+const isDemo = process.env.NEXT_PUBLIC_DEBUG === 'true';
 
 const VALID_ADVISOR_TABS = ['students', 'chat', 'analytics', 'manage', 'approvals'] as const;
 type AdvisorTab = typeof VALID_ADVISOR_TABS[number];
@@ -71,7 +71,6 @@ export default function AdvisorDashboard() {
   useEffect(() => {
     window.location.hash = activeTab;
   }, [activeTab]);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedAdvisee, setSelectedAdvisee] = useState<Advisee | null>(null);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
 
@@ -136,17 +135,21 @@ export default function AdvisorDashboard() {
       {/* Green accent bar */}
       <div className="h-1.5 bg-[#115740]" />
 
+      {/* Demo banner */}
+      {isDemo && (
+        <div className="bg-[#B9975B]/15 border-b border-[#B9975B]/30 px-6 py-2">
+          <div className="max-w-7xl mx-auto flex items-center justify-center gap-2 text-xs text-[#8a7040]">
+            <span className="font-semibold">Demo Mode</span>
+            <span className="text-[#8a7040]/60">|</span>
+            <span>Viewing as demo advisor &mdash; Dr. Emily Rodriguez</span>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="sticky top-0 z-50 border-b border-gray-200 bg-white">
         <div className="max-w-7xl mx-auto px-6 flex items-center justify-between h-[72px]">
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="p-1.5 hover:bg-gray-100 rounded transition-colors"
-            >
-              {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-            </button>
-
             <a href="/" className="flex items-center gap-3">
               <span
                 className="text-[#115740] text-2xl uppercase"
@@ -182,11 +185,11 @@ export default function AdvisorDashboard() {
               Home
             </Link>
             <button
-              onClick={async () => { await signOut(); router.push('/'); }}
+              onClick={async () => { if (!isDemo) await signOut(); router.push('/'); }}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-sm text-[#115740] hover:bg-[#115740]/5 rounded transition-colors"
             >
               <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">Logout</span>
+              <span className="hidden sm:inline">{isDemo ? 'Home' : 'Logout'}</span>
             </button>
           </div>
         </div>
@@ -211,56 +214,29 @@ export default function AdvisorDashboard() {
         </div>
       </div>
 
-      {/* Slide-out sidebar overlay */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/30 z-40 transition-opacity"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-      <aside
-        className={`fixed top-0 left-0 h-full w-[260px] bg-white z-50 shadow-xl transform transition-transform duration-300 ease-in-out ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
-      >
-        <div className="h-1.5 bg-[#115740]" />
-        <div className="relative flex items-center px-5 py-4 border-b border-[#e8e4db]">
-          <span
-            className="text-[#115740] text-xl uppercase"
-            style={{ fontFamily: '"Libre Baskerville", Baskerville, Georgia, serif', letterSpacing: '0.03em' }}
-          >
-            W<span className="text-[#B9975B] italic normal-case">&amp;</span>M
-          </span>
-          <button
-            onClick={() => setSidebarOpen(false)}
-            className="absolute right-4 p-1.5 hover:bg-gray-100 rounded transition-colors"
-          >
-            <X className="h-4 w-4 text-gray-500" />
-          </button>
+      {/* Tab navigation */}
+      <div className="max-w-7xl mx-auto px-6 mt-4 mb-6">
+        <div className="border-b border-gray-200 flex gap-0">
+          {sidebarItems.map((item) => (
+            <button
+              key={item.key}
+              onClick={() => setActiveTab(item.key)}
+              className={`flex items-center gap-2 px-5 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                activeTab === item.key
+                  ? 'border-[#115740] text-[#115740]'
+                  : 'border-transparent text-gray-500 hover:text-[#115740] hover:border-gray-300'
+              }`}
+              style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}
+            >
+              <item.icon className="h-4 w-4" />
+              {item.label}
+            </button>
+          ))}
         </div>
-        <div className="border-t-4 border-[#B9975B] bg-[#f7f5f0]">
-          <nav className="py-2">
-            {sidebarItems.map((item) => (
-              <button
-                key={item.key}
-                onClick={() => { setActiveTab(item.key); setSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3 px-5 py-3.5 text-[15px] transition-colors border-b border-[#e8e4db] last:border-b-0 ${
-                  activeTab === item.key
-                    ? 'bg-[#115740] text-white'
-                    : 'text-[#262626] hover:bg-[#eeebe4]'
-                }`}
-                style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}
-              >
-                <item.icon className={`h-4 w-4 flex-shrink-0 ${activeTab === item.key ? 'text-white' : 'text-[#115740]'}`} />
-                {item.label}
-              </button>
-            ))}
-          </nav>
-        </div>
-      </aside>
+      </div>
 
       {/* Main content */}
-      <div className="max-w-7xl mx-auto px-6 pb-16 mt-2">
+      <div className="max-w-7xl mx-auto px-6 pb-16">
         <main>
           {/* Students Tab */}
           {activeTab === 'students' && (

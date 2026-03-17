@@ -128,7 +128,7 @@ class ChatService:
     - Next step recommendations
     """
 
-    MODEL = "gpt-4o-mini"  # Cost-effective for chat
+    MODEL = "gpt-5.4"  # Latest frontier model (March 2026)
     MAX_CONTEXT_RESULTS = 5
     MAX_HISTORY_MESSAGES = 20
 

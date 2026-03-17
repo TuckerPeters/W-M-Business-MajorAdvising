@@ -26,7 +26,13 @@ import {
   User,
   X,
   Filter,
+  CheckCircle2,
+  Circle,
+  GraduationCap,
+  Sparkles,
 } from 'lucide-react';
+import { getDegreeRequirements } from '@/lib/api-client';
+import AISchedulePlanner from './AISchedulePlanner';
 
 /* =========================================================
    Time Parsing Utilities
@@ -389,12 +395,135 @@ function WeeklyCalendar({ courses, overlappingCodes, onRemoveCourse }: WeeklyCal
 }
 
 /* =========================================================
+   Degree Analytics Panel (embedded in schedule builder)
+========================================================= */
+
+interface DegreeReqCourse { code: string; title: string; credits: number; }
+interface DegreeReqGroup { name: string; courses: DegreeReqCourse[]; }
+interface DegreeReqMajor { name: string; credits_required: number; required_courses: DegreeReqCourse[]; elective_courses: DegreeReqCourse[]; electives_required: number; }
+interface DegreeReqs { prerequisites: DegreeReqGroup; core_curriculum: DegreeReqGroup[]; majors: DegreeReqMajor[]; total_credits_required: number; }
+
+function DegreeAnalyticsPanel({ selectedCourses, completedCourses, studentMajor }: {
+  selectedCourses: Course[];
+  completedCourses: Course[];
+  studentMajor?: string;
+}) {
+  const [reqs, setReqs] = useState<DegreeReqs | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set(['prereqs']));
+
+  useEffect(() => {
+    getDegreeRequirements().then(setReqs).catch(() => {});
+  }, []);
+
+  if (!reqs) return null;
+
+  const norm = (c: string) => c.replace(/\s+/g, ' ').trim().toUpperCase();
+  const completedSet = new Set(completedCourses.map(c => norm(c.code)));
+  const plannedSet = new Set(selectedCourses.map(c => norm(c.code)));
+  const allSet = new Set([...completedSet, ...plannedSet]);
+
+  const toggle = (key: string) => setExpanded(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
+
+  const major = reqs.majors.find(m => studentMajor && m.name.toLowerCase().includes(studentMajor.toLowerCase()));
+
+  // Build requirement groups to check
+  const groups: { key: string; name: string; courses: DegreeReqCourse[]; label?: string }[] = [
+    { key: 'prereqs', name: 'Pre-Major Prerequisites', courses: reqs.prerequisites?.courses || [] },
+    ...reqs.core_curriculum.map((g, i) => ({ key: `core-${i}`, name: g.name, courses: g.courses })),
+  ];
+  if (major) {
+    groups.push({ key: 'major-req', name: `${major.name} — Required`, courses: major.required_courses });
+    if (major.elective_courses.length > 0) {
+      groups.push({ key: 'major-elec', name: `${major.name} — Electives (${major.electives_required})`, courses: major.elective_courses });
+    }
+  }
+
+  // Overall stats
+  const allReqCodes = new Set(groups.flatMap(g => g.courses.map(c => norm(c.code))));
+  const reqsFulfilled = [...allReqCodes].filter(c => allSet.has(c)).length;
+  const reqsNewlyFulfilled = [...allReqCodes].filter(c => plannedSet.has(c) && !completedSet.has(c)).length;
+
+  return (
+    <div className="border-t border-[#e8e4db]">
+      <div className="px-3 py-2 bg-[#f7f5f0] border-b border-[#e8e4db]">
+        <div className="flex items-center gap-1.5">
+          <GraduationCap className="h-3.5 w-3.5 text-[#115740]" />
+          <h4 className="text-[#115740] font-semibold text-xs" style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}>
+            Requirements Check
+          </h4>
+        </div>
+        <p className="text-[10px] text-gray-500 mt-0.5">
+          {reqsFulfilled}/{allReqCodes.size} fulfilled
+          {reqsNewlyFulfilled > 0 && <span className="text-green-600 font-medium"> (+{reqsNewlyFulfilled} this semester)</span>}
+        </p>
+      </div>
+      <div className="divide-y divide-gray-100">
+        {groups.map(group => {
+          const done = group.courses.filter(c => completedSet.has(norm(c.code))).length;
+          const planned = group.courses.filter(c => plannedSet.has(norm(c.code)) && !completedSet.has(norm(c.code))).length;
+          const total = group.courses.length;
+          const isOpen = expanded.has(group.key);
+          const allDone = done === total;
+          return (
+            <div key={group.key}>
+              <button
+                onClick={() => toggle(group.key)}
+                className="w-full flex items-center gap-1.5 px-3 py-2 text-left hover:bg-gray-50 transition-colors"
+              >
+                {allDone ? (
+                  <CheckCircle2 className="h-3 w-3 text-green-500 flex-shrink-0" />
+                ) : (
+                  <Circle className="h-3 w-3 text-gray-300 flex-shrink-0" />
+                )}
+                <span className="text-[11px] font-medium text-gray-700 flex-1 truncate">{group.name}</span>
+                <span className="text-[10px] text-gray-400">{done}{planned > 0 && <span className="text-blue-500">+{planned}</span>}/{total}</span>
+              </button>
+              {isOpen && (
+                <div className="px-3 pb-2 space-y-0.5">
+                  {group.courses.map(c => {
+                    const isDone = completedSet.has(norm(c.code));
+                    const isPlanned = plannedSet.has(norm(c.code)) && !isDone;
+                    return (
+                      <div key={c.code} className="flex items-center gap-1.5 text-[10px] py-0.5">
+                        {isDone ? (
+                          <CheckCircle2 className="h-2.5 w-2.5 text-green-500 flex-shrink-0" />
+                        ) : isPlanned ? (
+                          <div className="h-2.5 w-2.5 rounded-full border-[1.5px] border-blue-400 bg-blue-50 flex-shrink-0" />
+                        ) : (
+                          <Circle className="h-2.5 w-2.5 text-gray-300 flex-shrink-0" />
+                        )}
+                        <span className={`truncate ${isDone ? 'text-green-700 line-through' : isPlanned ? 'text-blue-600 font-medium' : 'text-gray-600'}`}>
+                          {c.code}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
    Main ScheduleBuilder
 ========================================================= */
 
 interface ScheduleBuilderProps {
   availableCourses: Course[];
   plannedCourses?: Course[];
+  completedCourses?: Course[];
+  currentCourses?: Course[];
+  studentMajor?: string;
+  creditsEarned?: number;
+  classYear?: number;
   onCourseAdded?: (course: Course) => Promise<Course | null>;
   onCourseRemoved?: (course: Course) => Promise<boolean>;
 }
@@ -402,6 +531,11 @@ interface ScheduleBuilderProps {
 export default function ScheduleBuilder({
   availableCourses,
   plannedCourses = [],
+  completedCourses = [],
+  currentCourses = [],
+  studentMajor,
+  creditsEarned = 0,
+  classYear = 2027,
   onCourseAdded,
   onCourseRemoved,
 }: ScheduleBuilderProps) {
@@ -448,6 +582,7 @@ export default function ScheduleBuilder({
   const [expandedDepts, setExpandedDepts] = useState<Set<string>>(new Set());
   const [sectionPickerCourse, setSectionPickerCourse] = useState<Course | null>(null);
   const [hideOverlapping, setHideOverlapping] = useState(false);
+  const [showAIPlanner, setShowAIPlanner] = useState(false);
 
   // DnD state
   const [activeDragCourse, setActiveDragCourse] = useState<Course | null>(null);
@@ -641,6 +776,7 @@ export default function ScheduleBuilder({
   };
 
   return (
+    <>
     <DndContext
       sensors={sensors}
       collisionDetection={closestCorners}
@@ -650,15 +786,18 @@ export default function ScheduleBuilder({
     >
       <div className="flex gap-5" style={{ height: 'calc(100vh - 14rem)' }}>
         {/* ====== Catalog Sidebar ====== */}
-        <div className="w-72 flex-shrink-0 border border-[#e8e4db] rounded bg-white flex flex-col overflow-hidden">
+        <div className="w-80 flex-shrink-0 border border-[#e8e4db] rounded bg-white flex flex-col overflow-hidden">
           {/* Header */}
           <div className="px-4 py-3 border-b border-[#e8e4db] bg-[#f7f5f0] space-y-2.5">
-            <h3
-              className="text-[#115740] font-semibold text-sm"
-              style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}
-            >
-              Course Catalog
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3
+                className="text-[#115740] font-semibold text-sm"
+                style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}
+              >
+                Course Catalog
+              </h3>
+              <span className="text-[11px] text-gray-400">{filteredCourses.length} courses</span>
+            </div>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
               <input
@@ -668,34 +807,19 @@ export default function ScheduleBuilder({
                 className="w-full h-8 pl-9 pr-3 rounded border border-[#e8e4db] bg-white text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#115740] focus:border-transparent"
               />
             </div>
-            {/* Filters row */}
-            <div className="flex items-center gap-2">
-              <div className="flex flex-wrap gap-1 flex-1">
-                <button
-                  onClick={() => setDeptFilter('all')}
-                  className={`px-2 py-0.5 text-[11px] rounded-full border transition-colors ${
-                    deptFilter === 'all'
-                      ? 'bg-[#115740] text-white border-[#115740]'
-                      : 'border-[#e8e4db] text-gray-600 hover:bg-[#f7f5f0]'
-                  }`}
-                >
-                  All
-                </button>
-                {departments.map((dept) => (
-                  <button
-                    key={dept}
-                    onClick={() => setDeptFilter(dept === deptFilter ? 'all' : dept)}
-                    className={`px-2 py-0.5 text-[11px] rounded-full border transition-colors ${
-                      deptFilter === dept
-                        ? 'bg-[#115740] text-white border-[#115740]'
-                        : 'border-[#e8e4db] text-gray-600 hover:bg-[#f7f5f0]'
-                    }`}
-                  >
-                    {dept}
-                  </button>
-                ))}
-              </div>
-            </div>
+            {/* Department dropdown */}
+            <select
+              value={deptFilter}
+              onChange={(e) => setDeptFilter(e.target.value)}
+              className="w-full h-8 px-3 rounded border border-[#e8e4db] bg-white text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#115740] focus:border-transparent"
+            >
+              <option value="all">All Departments ({departments.length})</option>
+              {departments.map((dept) => (
+                <option key={dept} value={dept}>
+                  {dept} ({groupedCatalog[dept]?.length || unselectedCourses.filter(c => c.dept === dept).length})
+                </option>
+              ))}
+            </select>
             {/* Hide overlapping toggle */}
             {selectedCourses.length > 0 && (
               <button
@@ -721,31 +845,40 @@ export default function ScheduleBuilder({
               const courses = groupedCatalog[dept];
               const isExpanded = expandedDepts.has(dept);
               return (
-                <div key={dept} className="mb-0.5">
+                <div key={dept} className="mb-1">
                   <button
                     onClick={() => toggleDept(dept)}
-                    className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded hover:bg-[#f7f5f0] transition-colors text-left"
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-md hover:bg-[#f7f5f0] transition-colors text-left border border-transparent hover:border-[#e8e4db]"
                   >
                     {isExpanded ? (
-                      <ChevronDown className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                      <ChevronDown className="h-4 w-4 text-[#115740] flex-shrink-0" />
                     ) : (
-                      <ChevronRight className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                      <ChevronRight className="h-4 w-4 text-gray-400 flex-shrink-0" />
                     )}
-                    <span className="font-medium text-sm text-[#262626] flex-1">{dept}</span>
-                    <span className="text-[11px] text-gray-400">{courses.length}</span>
+                    <span className="font-semibold text-sm text-[#115740] flex-1">{dept}</span>
+                    <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{courses.length}</span>
                   </button>
                   {isExpanded && (
-                    <div className="space-y-1 pl-1.5 pr-0.5 pb-1">
-                      {courses.map((course, idx) => (
-                        <TimelineCourseCard
-                          key={`${course.code}-${idx}`}
-                          course={course}
-                          draggable
-                          dragId={`catalog:${course.code}`}
-                          dragData={{ course, sourceSemesterId: 'catalog' }}
-                          onClick={() => handleAddCourse(course)}
-                        />
-                      ))}
+                    <div className="space-y-1 pl-2 pr-0.5 pb-1 mt-1">
+                      {courses.map((course, idx) => {
+                        const completedCodes = new Set(completedCourses.map(c => c.code.toUpperCase()));
+                        const prereqsMet = course.prereqs.length === 0 || course.prereqs.every(p => completedCodes.has(p.toUpperCase()));
+                        const hasPrereqs = course.prereqs.length > 0;
+                        return (
+                          <div key={`${course.code}-${idx}`} className="relative">
+                            <TimelineCourseCard
+                              course={course}
+                              draggable
+                              dragId={`catalog:${course.code}`}
+                              dragData={{ course, sourceSemesterId: 'catalog' }}
+                              onClick={() => handleAddCourse(course)}
+                            />
+                            {hasPrereqs && (
+                              <div className={`absolute top-1 right-1 w-2 h-2 rounded-full ${prereqsMet ? 'bg-green-400' : 'bg-red-400'}`} title={prereqsMet ? 'Prerequisites met' : `Prereqs: ${course.prereqs.join(', ')}`} />
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -767,6 +900,13 @@ export default function ScheduleBuilder({
                   >
                     Schedule Balance
                   </span>
+                  <button
+                    onClick={() => setShowAIPlanner(true)}
+                    className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-gradient-to-r from-[#115740] to-[#1a7a5a] text-white text-xs font-medium hover:from-[#0d4632] hover:to-[#115740] transition-all shadow-sm"
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    AI Plan My Schedule
+                  </button>
                   <span className="text-xl font-bold text-[#115740]">
                     {scheduleScore.score}
                     <span className="text-sm font-normal text-gray-400">/100</span>
@@ -779,6 +919,11 @@ export default function ScheduleBuilder({
                   <span className="text-sm text-gray-600">
                     <strong className="text-[#115740]">{selectedCourses.length}</strong> courses
                   </span>
+                  {completedCourses.length > 0 && (
+                    <span className="text-sm text-gray-500">
+                      Degree: <strong className="text-[#115740]">{completedCourses.reduce((s, c) => s + c.credits, 0) + totalCredits}</strong>/120
+                    </span>
+                  )}
                   {overlappingCodes.size > 0 && (
                     <Badge variant="destructive" className="text-xs">
                       <AlertTriangle className="h-3 w-3 mr-1" />
@@ -834,21 +979,22 @@ export default function ScheduleBuilder({
               />
             )}
 
-            {/* Right sidebar: all courses running total */}
-            {selectedCourses.length > 0 && (
-              <div className="w-48 flex-shrink-0 border border-[#e8e4db] rounded bg-white flex flex-col overflow-hidden">
-                <div className="px-3 py-2 border-b border-[#e8e4db] bg-[#f7f5f0]">
-                  <h4
-                    className="text-[#115740] font-semibold text-xs"
-                    style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}
-                  >
-                    My Courses
-                  </h4>
-                  <p className="text-[10px] text-gray-500 mt-0.5">
-                    {selectedCourses.length} course{selectedCourses.length !== 1 ? 's' : ''} · {totalCredits} credits
-                  </p>
-                </div>
-                <div className="flex-1 overflow-y-auto p-1.5 space-y-1">
+            {/* Right sidebar: Courses + Degree Analytics */}
+            <div className="w-56 flex-shrink-0 border border-[#e8e4db] rounded bg-white flex flex-col overflow-hidden">
+              <div className="px-3 py-2 border-b border-[#e8e4db] bg-[#f7f5f0]">
+                <h4
+                  className="text-[#115740] font-semibold text-xs"
+                  style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}
+                >
+                  Planned Courses
+                </h4>
+                <p className="text-[10px] text-gray-500 mt-0.5">
+                  {selectedCourses.length} course{selectedCourses.length !== 1 ? 's' : ''} · {totalCredits} credits
+                </p>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                {/* Course list */}
+                <div className="p-1.5 space-y-1">
                   {selectedCourses.map((course, idx) => {
                     const hasTime = getCourseSlots(course).length > 0;
                     return (
@@ -880,9 +1026,19 @@ export default function ScheduleBuilder({
                       </div>
                     );
                   })}
+                  {selectedCourses.length === 0 && (
+                    <p className="text-[11px] text-gray-400 text-center py-3">No courses added yet</p>
+                  )}
                 </div>
+
+                {/* Degree Analytics inline */}
+                <DegreeAnalyticsPanel
+                  selectedCourses={selectedCourses}
+                  completedCourses={completedCourses}
+                  studentMajor={studentMajor}
+                />
               </div>
-            )}
+            </div>
           </div>
         </CalendarDropZone>
 
@@ -1020,5 +1176,19 @@ export default function ScheduleBuilder({
         </div>
       )}
     </DndContext>
+
+    {/* AI Schedule Planner Modal */}
+    {showAIPlanner && (
+      <AISchedulePlanner
+        completedCourses={completedCourses}
+        currentCourses={currentCourses}
+        plannedCourses={selectedCourses}
+        studentMajor={studentMajor}
+        creditsEarned={creditsEarned}
+        classYear={classYear}
+        onClose={() => setShowAIPlanner(false)}
+      />
+    )}
+    </>
   );
 }

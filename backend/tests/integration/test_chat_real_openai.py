@@ -242,7 +242,7 @@ class TestRealOpenAIConnection:
         Token usage: ~20 tokens
         """
         response = real_openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.4",
             messages=[{"role": "user", "content": "Say 'ok'"}],
             max_tokens=5
         )

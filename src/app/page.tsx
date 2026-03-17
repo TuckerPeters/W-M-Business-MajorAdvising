@@ -7,9 +7,7 @@ import {
   GraduationCap,
   Users,
   MessageSquare,
-  BookOpen,
   BarChart3,
-  Calendar,
   Shield,
   ArrowRight,
   LogOut,
@@ -21,16 +19,15 @@ import LoginModal from '@/components/auth/LoginModal';
 const navItems = [
   { label: 'Student Portal', href: '/student', icon: GraduationCap },
   { label: 'Advisor Portal', href: '/advisor', icon: Users },
-  { label: 'AI Advisor', href: '/student', icon: MessageSquare },
-  { label: 'Course Catalog', href: '/student', icon: BookOpen },
-  { label: 'Schedule Builder', href: '/student', icon: Calendar },
-  { label: 'Degree Progress', href: '/student', icon: BarChart3 },
 ];
+
+const isDemo = process.env.NEXT_PUBLIC_DEBUG === 'true';
 
 export default function Home() {
   const { user, loading, signOut } = useAuth();
   const router = useRouter();
   const [loginRole, setLoginRole] = useState<'student' | 'advisor' | null>(null);
+  const canNavigate = !!user || isDemo;
 
   const handleSignOut = async () => {
     await signOut();
@@ -40,6 +37,17 @@ export default function Home() {
     <div className="min-h-screen bg-white">
       {/* ===== GREEN ACCENT BAR (top edge) ===== */}
       <div className="h-1.5 bg-[#115740]" />
+
+      {/* ===== DEMO BANNER ===== */}
+      {isDemo && (
+        <div className="bg-[#B9975B]/15 border-b border-[#B9975B]/30 px-6 py-2.5">
+          <div className="max-w-7xl mx-auto flex items-center justify-center gap-2 text-sm text-[#8a7040]">
+            <span className="font-semibold">Demo Mode</span>
+            <span className="text-[#8a7040]/60">|</span>
+            <span>Explore the platform with sample data &mdash; no login required</span>
+          </div>
+        </div>
+      )}
 
       {/* ===== HEADER — matches W&M site ===== */}
       <header className="border-b border-gray-200">
@@ -74,6 +82,10 @@ export default function Home() {
                   Sign Out
                 </button>
               </>
+            ) : isDemo ? (
+              <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-sm text-[#B9975B] font-medium">
+                Demo Mode
+              </span>
             ) : (
               <>
                 <button
@@ -134,12 +146,12 @@ export default function Home() {
           <div className="border-t-4 border-[#B9975B] bg-[#f7f5f0] pt-1">
             <nav className="py-2">
               {navItems.map((item) => {
-                const needsLogin = item.label === 'Student Portal' || item.label === 'Advisor Portal';
-                if (needsLogin && !user) {
+                const isAdvisorLink = item.href.startsWith('/advisor');
+                if (!canNavigate) {
                   return (
                     <button
                       key={item.label}
-                      onClick={() => setLoginRole(item.label === 'Student Portal' ? 'student' : 'advisor')}
+                      onClick={() => setLoginRole(isAdvisorLink ? 'advisor' : 'student')}
                       className="w-full flex items-center gap-3 px-5 py-3 text-[15px] text-[#262626] hover:bg-[#eeebe4] transition-colors border-b border-[#e8e4db] last:border-b-0 text-left"
                       style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}
                     >
@@ -180,7 +192,7 @@ export default function Home() {
 
           {/* Portal cards */}
           <div className="grid sm:grid-cols-2 gap-5 mb-10">
-            <button onClick={() => user ? router.push('/student') : setLoginRole('student')} className="group text-left">
+            <button onClick={() => canNavigate ? router.push('/student') : setLoginRole('student')} className="group text-left">
               <div className="border border-gray-200 rounded bg-white p-6 hover:shadow-lg transition-all duration-200 hover:border-[#115740]/30">
                 <div className="flex items-start gap-4">
                   <div className="w-12 h-12 rounded bg-[#115740] flex items-center justify-center flex-shrink-0">
@@ -205,7 +217,7 @@ export default function Home() {
               </div>
             </button>
 
-            <button onClick={() => user ? router.push('/advisor') : setLoginRole('advisor')} className="group text-left">
+            <button onClick={() => canNavigate ? router.push('/advisor') : setLoginRole('advisor')} className="group text-left">
               <div className="border border-gray-200 rounded bg-white p-6 hover:shadow-lg transition-all duration-200 hover:border-[#115740]/30">
                 <div className="flex items-start gap-4">
                   <div className="w-12 h-12 rounded bg-[#262626] flex items-center justify-center flex-shrink-0">
