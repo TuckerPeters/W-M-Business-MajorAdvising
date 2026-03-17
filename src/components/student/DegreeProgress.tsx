@@ -41,7 +41,7 @@ interface Props {
 }
 
 function normalizeCode(code: string) {
-  return code.replace(/\s+/g, ' ').trim().toUpperCase();
+  return (code || '').replace(/\s+/g, ' ').trim().toUpperCase();
 }
 
 function RequirementRow({ course, completed, inProgress, planned }: {
@@ -148,9 +148,9 @@ export default function DegreeProgress({ completedCourses, currentCourses, plann
     return <p className="text-gray-500 py-8 text-center">Could not load degree requirements.</p>;
   }
 
-  const completedCodes = new Set(completedCourses.map(c => normalizeCode(c.code)));
-  const currentCodes = new Set(currentCourses.map(c => normalizeCode(c.code)));
-  const plannedCodes = new Set(plannedCourses.map(c => normalizeCode(c.code)));
+  const completedCodes = new Set(completedCourses.filter(c => c.code).map(c => normalizeCode(c.code)));
+  const currentCodes = new Set(currentCourses.filter(c => c.code).map(c => normalizeCode(c.code)));
+  const plannedCodes = new Set(plannedCourses.filter(c => c.code).map(c => normalizeCode(c.code)));
 
   // Credit calculations
   const totalCredits = reqs.total_credits_required;

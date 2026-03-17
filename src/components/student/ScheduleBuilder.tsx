@@ -417,9 +417,9 @@ function DegreeAnalyticsPanel({ selectedCourses, completedCourses, studentMajor 
 
   if (!reqs) return null;
 
-  const norm = (c: string) => c.replace(/\s+/g, ' ').trim().toUpperCase();
-  const completedSet = new Set(completedCourses.map(c => norm(c.code)));
-  const plannedSet = new Set(selectedCourses.map(c => norm(c.code)));
+  const norm = (c: string) => (c || '').replace(/\s+/g, ' ').trim().toUpperCase();
+  const completedSet = new Set(completedCourses.filter(c => c.code).map(c => norm(c.code)));
+  const plannedSet = new Set(selectedCourses.filter(c => c.code).map(c => norm(c.code)));
   const allSet = new Set([...completedSet, ...plannedSet]);
 
   const toggle = (key: string) => setExpanded(prev => {
