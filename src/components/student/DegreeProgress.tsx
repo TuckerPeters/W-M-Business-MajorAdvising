@@ -234,7 +234,7 @@ export default function DegreeProgress({ completedCourses, currentCourses, plann
       )}
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="text-center p-3 border border-gray-200 rounded-lg">
           <p className="text-lg font-bold text-[#115740]">{prereqDone}/{prereqCourses.length}</p>
           <p className="text-xs text-gray-500">Pre-Major Prereqs</p>

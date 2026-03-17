@@ -215,28 +215,29 @@ export default function AdvisorDashboard() {
       </div>
 
       {/* Tab navigation */}
-      <div className="max-w-7xl mx-auto px-6 mt-4 mb-6">
-        <div className="border-b border-gray-200 flex gap-0">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 mt-4 mb-6">
+        <div className="border-b border-gray-200 flex overflow-x-auto scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0">
           {sidebarItems.map((item) => (
             <button
               key={item.key}
               onClick={() => setActiveTab(item.key)}
-              className={`flex items-center gap-2 px-5 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors -mb-px whitespace-nowrap ${
                 activeTab === item.key
                   ? 'border-[#115740] text-[#115740]'
                   : 'border-transparent text-gray-500 hover:text-[#115740] hover:border-gray-300'
               }`}
               style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}
             >
-              <item.icon className="h-4 w-4" />
-              {item.label}
+              <item.icon className="h-4 w-4 flex-shrink-0" />
+              <span className="hidden sm:inline">{item.label}</span>
+              <span className="sm:hidden">{item.label.split(' ')[0]}</span>
             </button>
           ))}
         </div>
       </div>
 
       {/* Main content */}
-      <div className="max-w-7xl mx-auto px-6 pb-16">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 pb-16">
         <main>
           {/* Students Tab */}
           {activeTab === 'students' && (

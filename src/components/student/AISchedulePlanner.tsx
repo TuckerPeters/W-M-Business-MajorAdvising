@@ -209,8 +209,8 @@ Credits remaining: ${120 - creditsEarned}.`;
   const totalPlanCredits = plan ? plan.reduce((s, sem) => s + sem.totalCredits, 0) : 0;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-2 sm:p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[95vh] sm:max-h-[90vh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="bg-[#115740] px-6 py-4 flex items-center justify-between flex-shrink-0">
           <div className="flex items-center gap-3">
@@ -228,9 +228,9 @@ Credits remaining: ${120 - creditsEarned}.`;
         </div>
 
         {/* Content */}
-        <div className="flex-1 flex min-h-0">
+        <div className="flex-1 flex flex-col md:flex-row min-h-0">
           {/* Chat side */}
-          <div className="flex-1 flex flex-col border-r border-gray-200">
+          <div className="flex-1 flex flex-col border-b md:border-b-0 md:border-r border-gray-200 min-h-[40vh] md:min-h-0">
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               {messages.map((msg, i) => (
                 <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -282,7 +282,7 @@ Credits remaining: ${120 - creditsEarned}.`;
           </div>
 
           {/* Plan side */}
-          <div className="w-80 flex flex-col bg-gray-50 overflow-hidden">
+          <div className="w-full md:w-80 flex flex-col bg-gray-50 overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
               <h3 className="font-semibold text-[#115740] text-sm" style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}>
                 Your Plan

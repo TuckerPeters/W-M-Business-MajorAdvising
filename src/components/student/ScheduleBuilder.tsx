@@ -784,9 +784,9 @@ export default function ScheduleBuilder({
       onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveDragCourse(null)}
     >
-      <div className="flex gap-5" style={{ height: 'calc(100vh - 14rem)' }}>
+      <div className="flex flex-col lg:flex-row gap-4 lg:gap-5" style={{ minHeight: '60vh' }}>
         {/* ====== Catalog Sidebar ====== */}
-        <div className="w-80 flex-shrink-0 border border-[#e8e4db] rounded bg-white flex flex-col overflow-hidden">
+        <div className="w-full lg:w-80 flex-shrink-0 border border-[#e8e4db] rounded bg-white flex flex-col overflow-hidden max-h-[50vh] lg:max-h-none" style={{ height: 'auto' }}>
           {/* Header */}
           <div className="px-4 py-3 border-b border-[#e8e4db] bg-[#f7f5f0] space-y-2.5">
             <div className="flex items-center justify-between">
@@ -962,7 +962,7 @@ export default function ScheduleBuilder({
           </div>
 
           {/* Weekly Calendar + Course List sidebar */}
-          <div className="flex-1 flex gap-3 min-h-0">
+          <div className="flex-1 flex flex-col lg:flex-row gap-3 min-h-0 overflow-x-auto">
             {selectedCourses.length === 0 ? (
               <div className="flex-1 border-2 border-dashed border-[#e8e4db] rounded flex items-center justify-center">
                 <div className="text-center text-gray-400">
@@ -980,7 +980,7 @@ export default function ScheduleBuilder({
             )}
 
             {/* Right sidebar: Courses + Degree Analytics */}
-            <div className="w-56 flex-shrink-0 border border-[#e8e4db] rounded bg-white flex flex-col overflow-hidden">
+            <div className="w-full lg:w-56 flex-shrink-0 border border-[#e8e4db] rounded bg-white flex flex-col overflow-hidden max-h-[50vh] lg:max-h-none">
               <div className="px-3 py-2 border-b border-[#e8e4db] bg-[#f7f5f0]">
                 <h4
                   className="text-[#115740] font-semibold text-xs"
