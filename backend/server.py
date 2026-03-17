@@ -735,10 +735,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Defaults — also honor DEMO_MODE env var for deployments using uvicorn directly
+# Defaults — also honor env vars for deployments using uvicorn directly (Heroku)
 app.state.enable_scheduler = True
 app.state.debug_mode = os.getenv("DEMO_MODE", "").lower() in ("true", "1")
-app.state.debug_tracking = False
+app.state.debug_tracking = os.getenv("DEBUG_TRACKING", "").lower() in ("true", "1")
 
 
 # API Endpoints
