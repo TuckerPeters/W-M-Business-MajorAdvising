@@ -685,7 +685,7 @@ class ChatService:
             model=self.MODEL,
             messages=messages,
             temperature=0.7,
-            max_tokens=1000
+            max_completion_tokens=1000
         )
 
         response_text = response.choices[0].message.content
