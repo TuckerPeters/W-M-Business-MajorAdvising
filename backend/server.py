@@ -1747,10 +1747,6 @@ async def list_conversations(
     if not verify_user_access(current_user, user_id):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # In demo mode, return empty list — chats aren't persisted
-    if is_debug_mode():
-        return ConversationListResponse(conversations=[], total=0)
-
     conversation_service = get_conversation_service()
     conversations = conversation_service.list_conversations(user_id, limit, offset)
 
@@ -1900,87 +1896,73 @@ async def chat_message(
         # advisee overview instead of trying to look up the advisor as a student.
         chat_student_id = None if is_advisor_self else request.studentId
 
-        # In demo mode, skip all persistence — don't save chats to Firestore
-        # since all demo users share the same accounts
-        if is_debug_mode():
-            chat_history = request.chatHistory or []
-            conversation_id = request.conversationId or "demo-ephemeral"
+        conversation_service = get_conversation_service()
+        conversation_id = request.conversationId
 
-            response = chat_service.chat(
-                student_id=chat_student_id,
-                message=request.message,
-                chat_history=chat_history,
-                user_id=current_user.uid,
-                user_role=current_user.role.value
-            )
+        # Resolve conversation and chat history
+        if conversation_id:
+            conversation = conversation_service.get_conversation(conversation_id)
+            if not conversation:
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            if not verify_user_access(current_user, conversation["studentId"]):
+                raise HTTPException(status_code=403, detail="Access denied to conversation")
+
+            stored_messages = conversation_service.get_messages(conversation_id, limit=20)
+            chat_history = [
+                {"role": m["role"], "content": m["content"]}
+                for m in stored_messages
+            ]
         else:
-            conversation_service = get_conversation_service()
-            conversation_id = request.conversationId
-
-            # Resolve conversation and chat history
-            if conversation_id:
-                conversation = conversation_service.get_conversation(conversation_id)
-                if not conversation:
-                    raise HTTPException(status_code=404, detail="Conversation not found")
-                if not verify_user_access(current_user, conversation["studentId"]):
-                    raise HTTPException(status_code=403, detail="Access denied to conversation")
-
-                stored_messages = conversation_service.get_messages(conversation_id, limit=20)
-                chat_history = [
-                    {"role": m["role"], "content": m["content"]}
-                    for m in stored_messages
-                ]
-            else:
-                conversation = conversation_service.create_conversation(
-                    user_id=current_user.uid,
-                    student_id=request.studentId,
-                    user_role=current_user.role.value
-                )
-                conversation_id = conversation["id"]
-                chat_history = request.chatHistory
-
-            response = chat_service.chat(
-                student_id=chat_student_id,
-                message=request.message,
-                chat_history=chat_history,
+            conversation = conversation_service.create_conversation(
                 user_id=current_user.uid,
+                student_id=request.studentId,
                 user_role=current_user.role.value
             )
+            conversation_id = conversation["id"]
+            chat_history = request.chatHistory
 
-            # Persist both messages
-            conversation_service.add_message(conversation_id, "user", request.message)
-            conversation_service.add_message(
-                conversation_id, "assistant", response.content,
-                citations=[
-                    {"source": c.source, "excerpt": c.excerpt, "relevance": c.relevance}
-                    for c in response.citations
-                ],
-                risks=[
-                    {"type": r.type, "severity": r.severity, "message": r.message}
-                    for r in response.risks
-                ],
-                next_steps=[
-                    {"action": n.action, "priority": n.priority, "deadline": n.deadline}
-                    for n in response.nextSteps
-                ]
-            )
+        response = chat_service.chat(
+            student_id=chat_student_id,
+            message=request.message,
+            chat_history=chat_history,
+            user_id=current_user.uid,
+            user_role=current_user.role.value
+        )
 
-            # Store question embedding for common-questions clustering
-            try:
-                from google.cloud.firestore_v1.vector import Vector
-                from datetime import datetime as dt
-                emb_service = get_embeddings_service()
-                embedding = emb_service.generate_embedding(request.message)
-                db = get_firestore_client()
-                db.collection("question_embeddings").add({
-                    "text": request.message,
-                    "embedding": Vector(embedding),
-                    "conversationId": conversation_id,
-                    "studentId": request.studentId,
-                    "createdAt": dt.utcnow().isoformat()
-                })
-            except Exception:
-                pass
+        # Persist both messages
+        conversation_service.add_message(conversation_id, "user", request.message)
+        conversation_service.add_message(
+            conversation_id, "assistant", response.content,
+            citations=[
+                {"source": c.source, "excerpt": c.excerpt, "relevance": c.relevance}
+                for c in response.citations
+            ],
+            risks=[
+                {"type": r.type, "severity": r.severity, "message": r.message}
+                for r in response.risks
+            ],
+            next_steps=[
+                {"action": n.action, "priority": n.priority, "deadline": n.deadline}
+                for n in response.nextSteps
+            ]
+        )
+
+        # Store question embedding for common-questions clustering
+        try:
+            from google.cloud.firestore_v1.vector import Vector
+            from datetime import datetime as dt
+            emb_service = get_embeddings_service()
+            embedding = emb_service.generate_embedding(request.message)
+            db = get_firestore_client()
+            db.collection("question_embeddings").add({
+                "text": request.message,
+                "embedding": Vector(embedding),
+                "conversationId": conversation_id,
+                "studentId": request.studentId,
+                "createdAt": dt.utcnow().isoformat()
+            })
+        except Exception:
+            pass
 
         return ChatMessageResponse(
             content=response.content,
