@@ -249,7 +249,7 @@ export const getAdvisorConversations = async (advisorId: string = getAdvisorId()
     status: c.status,
     messageCount: c.messageCount || 0,
     updatedAt: c.updatedAt,
-    lastMessagePreview: c.lastMessagePreview,
+    lastMessagePreview: c.lastMessagePreview ? unwrapLegacyJsonContent(c.lastMessagePreview) : c.lastMessagePreview,
   }));
 };
 
@@ -300,7 +300,7 @@ export const getConversations = async () => {
     status: c.status,
     messageCount: c.messageCount || 0,
     updatedAt: c.updatedAt,
-    lastMessagePreview: c.lastMessagePreview,
+    lastMessagePreview: c.lastMessagePreview ? unwrapLegacyJsonContent(c.lastMessagePreview) : c.lastMessagePreview,
   }));
 };
 
@@ -309,20 +309,59 @@ export const getConversations = async () => {
  * field (the model used to be told to return JSON, and on truncation the raw
  * JSON would land in storage). Detect and unwrap those so they render as
  * markdown rather than raw JSON.
+ *
+ * Handles both valid JSON and truncated JSON — for truncated payloads we walk
+ * the `content` string ourselves and decode JSON escape sequences so the user
+ * still sees clean markdown instead of a raw `{"content":"..."}` blob.
  */
 function unwrapLegacyJsonContent(raw: any): string {
   if (typeof raw !== 'string') return '';
   const trimmed = raw.trim();
   if (!trimmed.startsWith('{')) return raw;
+
   try {
     const parsed = JSON.parse(trimmed);
     if (parsed && typeof parsed === 'object' && typeof parsed.content === 'string') {
       return parsed.content;
     }
   } catch {
-    // not valid JSON — fall through
+    // Fall through to partial extraction below.
   }
-  return raw;
+
+  const keyMatch = trimmed.match(/"content"\s*:\s*"/);
+  if (!keyMatch || keyMatch.index === undefined) return raw;
+
+  const escapes: Record<string, string> = {
+    n: '\n', t: '\t', r: '\r',
+    '"': '"', '\\': '\\', '/': '/',
+    b: '\b', f: '\f',
+  };
+  let out = '';
+  let i = keyMatch.index + keyMatch[0].length;
+  const n = trimmed.length;
+  while (i < n) {
+    const c = trimmed[i];
+    if (c === '\\') {
+      if (i + 1 >= n) break;
+      const esc = trimmed[i + 1];
+      if (esc === 'u') {
+        if (i + 5 >= n) break;
+        const hex = trimmed.slice(i + 2, i + 6);
+        const code = parseInt(hex, 16);
+        out += Number.isNaN(code) ? '?' : String.fromCharCode(code);
+        i += 6;
+      } else {
+        out += escapes[esc] ?? esc;
+        i += 2;
+      }
+    } else if (c === '"') {
+      return out;
+    } else {
+      out += c;
+      i += 1;
+    }
+  }
+  return out || raw;
 }
 
 export const getConversationMessages = async (conversationId: string) => {
