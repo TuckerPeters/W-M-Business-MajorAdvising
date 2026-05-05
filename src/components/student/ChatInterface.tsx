@@ -1,12 +1,15 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { ChatMessage } from '@/types';
 import {
-  sendChatMessage,
+  sendChatMessageStream,
   getConversations,
   getConversationMessages,
   ConversationSummary,
+  ChatStreamEvent,
 } from '@/lib/api-client';
 import {
   Send,
@@ -20,13 +23,11 @@ import {
   Trash2,
 } from 'lucide-react';
 
-type SendMessageFn = (message: string, conversationId?: string | null) => Promise<{
-  content: string;
-  citations: any[];
-  risks: any[];
-  nextSteps: any[];
-  conversationId: string;
-}>;
+type SendStreamFn = (
+  message: string,
+  conversationId: string | null | undefined,
+  onEvent: (event: ChatStreamEvent) => void,
+) => Promise<void>;
 
 type ListConversationsFn = () => Promise<ConversationSummary[]>;
 type DeleteConversationFn = (conversationId: string) => Promise<any>;
@@ -39,7 +40,7 @@ interface QuickPrompt {
 interface ChatInterfaceProps {
   activeConversationId?: string | null;
   onConversationChange?: (id: string | null) => void;
-  sendMessageFn?: SendMessageFn;
+  sendMessageStreamFn?: SendStreamFn;
   listConversationsFn?: ListConversationsFn;
   deleteConversationFn?: DeleteConversationFn;
   quickPrompts?: QuickPrompt[];
@@ -67,7 +68,7 @@ const defaultQuickPrompts: QuickPrompt[] = [
 export default function ChatInterface({
   activeConversationId = null,
   onConversationChange,
-  sendMessageFn = sendChatMessage,
+  sendMessageStreamFn = sendChatMessageStream,
   listConversationsFn = getConversations,
   deleteConversationFn,
   quickPrompts = defaultQuickPrompts,
@@ -165,51 +166,105 @@ export default function ChatInterface({
       content: input,
       timestamp: new Date(),
     };
+    const assistantId = (Date.now() + 1).toString();
+    const assistantPlaceholder: ChatMessage = {
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+    };
 
-    setMessages((prev) => [...prev, userMessage]);
+    setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     const messageText = input;
     setInput('');
     setIsLoading(true);
 
-    try {
-      const response = await sendMessageFn(messageText, conversationId);
+    let receivedAnyDelta = false;
+    let newConversationId: string | null = null;
 
-      if (response.conversationId && !conversationId) {
-        setConversationId(response.conversationId);
-        onConversationChange?.(response.conversationId);
-        // Refresh list so new conversation appears
+    try {
+      await sendMessageStreamFn(messageText, conversationId, (event) => {
+        if (event.type === 'content_delta') {
+          receivedAnyDelta = true;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: m.content + event.delta }
+                : m,
+            ),
+          );
+        } else if (event.type === 'metadata') {
+          newConversationId = event.conversationId;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    citations: (event.citations || []).map((c: any) => ({
+                      title: c.source || 'Source',
+                      url: '',
+                      version: c.relevance ? `relevance: ${c.relevance}` : '',
+                    })),
+                    risks: (event.risks || []).map(
+                      (r: any) => `[${r.severity?.toUpperCase()}] ${r.message}`,
+                    ),
+                    nextSteps: (event.nextSteps || []).map(
+                      (s: any) =>
+                        `${s.action}${s.deadline ? ` (by ${s.deadline})` : ''}`,
+                    ),
+                  }
+                : m,
+            ),
+          );
+        } else if (event.type === 'error') {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    content:
+                      m.content ||
+                      `Sorry, I was unable to process your request: ${event.message}`,
+                  }
+                : m,
+            ),
+          );
+        }
+      });
+
+      if (newConversationId && !conversationId) {
+        setConversationId(newConversationId);
+        onConversationChange?.(newConversationId);
         refreshConversations();
-      } else if (response.conversationId) {
-        // Refresh to update lastMessagePreview / title
+      } else if (newConversationId) {
         refreshConversations();
       }
 
-      const assistantMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: response.content,
-        citations: response.citations?.map((c: any) => ({
-          title: c.source || 'Source',
-          url: '',
-          version: c.relevance ? `relevance: ${c.relevance}` : '',
-        })),
-        risks: response.risks?.map((r: any) =>
-          `[${r.severity?.toUpperCase()}] ${r.message}`
-        ),
-        nextSteps: response.nextSteps?.map((s: any) =>
-          `${s.action}${s.deadline ? ` (by ${s.deadline})` : ''}`
-        ),
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
+      if (!receivedAnyDelta) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId && !m.content
+              ? {
+                  ...m,
+                  content:
+                    'Sorry, I was unable to process your request. Please try again.',
+                }
+              : m,
+          ),
+        );
+      }
     } catch (error) {
-      const errorMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: 'Sorry, I was unable to process your request. Please try again.',
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? {
+                ...m,
+                content:
+                  'Sorry, I was unable to process your request. Please try again.',
+              }
+            : m,
+        ),
+      );
     } finally {
       setIsLoading(false);
     }
@@ -364,7 +419,21 @@ export default function ChatInterface({
                       : 'bg-[#f7f5f0] border border-[#e8e4db] text-[#262626]'
                   }`}
                 >
-                  <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                  {message.role === 'user' ? (
+                    <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                  ) : message.content ? (
+                    <div className="text-sm prose prose-sm max-w-none prose-headings:font-semibold prose-headings:text-[#115740] prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:bg-[#e8e4db] prose-code:text-[#262626] prose-code:before:content-none prose-code:after:content-none prose-strong:text-[#262626] prose-a:text-[#115740]">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2 py-1">
+                      <div className="w-2 h-2 bg-[#115740]/40 rounded-full animate-bounce" />
+                      <div className="w-2 h-2 bg-[#115740]/40 rounded-full animate-bounce [animation-delay:100ms]" />
+                      <div className="w-2 h-2 bg-[#115740]/40 rounded-full animate-bounce [animation-delay:200ms]" />
+                    </div>
+                  )}
 
                   {/* Citations */}
                   {message.citations && message.citations.length > 0 && (
@@ -424,18 +493,6 @@ export default function ChatInterface({
                 </div>
               </div>
             ))
-          )}
-
-          {isLoading && (
-            <div className="flex justify-start">
-              <div className="bg-[#f7f5f0] border border-[#e8e4db] rounded-lg p-4">
-                <div className="flex gap-2">
-                  <div className="w-2 h-2 bg-[#115740]/40 rounded-full animate-bounce" />
-                  <div className="w-2 h-2 bg-[#115740]/40 rounded-full animate-bounce [animation-delay:100ms]" />
-                  <div className="w-2 h-2 bg-[#115740]/40 rounded-full animate-bounce [animation-delay:200ms]" />
-                </div>
-              </div>
-            </div>
           )}
 
           <div ref={messagesEndRef} />

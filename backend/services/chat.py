@@ -8,7 +8,7 @@ Integrates with policy documents and curriculum data.
 import os
 import json
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Iterator, Generator
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 
@@ -98,23 +98,164 @@ SCHEDULING & SECTION RECOMMENDATIONS:
 
 Guidelines:
 1. Be helpful, accurate, and supportive
-2. When citing policies or requirements, reference the specific source
+2. When citing policies or requirements, reference the specific source in the structured `citations` field
 3. If you're unsure about something, say so and recommend the student speak with a human advisor
-4. Identify any risks or concerns (academic probation, missed deadlines, prerequisite issues)
-5. Suggest concrete next steps when appropriate
+4. Identify any risks or concerns (academic probation, missed deadlines, prerequisite issues) in the `risks` field
+5. Suggest concrete next steps when appropriate in the `nextSteps` field
 6. Keep responses concise but complete
 
 You have access to curriculum data and policy documents. Use this context to provide accurate answers.
 Always prioritize official W&M Business School policies over general knowledge.
 
-IMPORTANT: Format your response as JSON with the following structure:
-{
-    "content": "Your main response text here",
-    "citations": [{"source": "source name", "excerpt": "relevant quote"}],
-    "risks": [{"type": "risk type", "severity": "low|medium|high", "message": "description"}],
-    "nextSteps": [{"action": "what to do", "priority": "low|medium|high", "deadline": "optional date"}]
-}
+OUTPUT FORMATTING:
+- The `content` field MUST be GitHub-Flavored Markdown. Use headings (##, ###), bold (**text**), bullet lists,
+  numbered lists, tables when comparing options, and inline code (`BUAD 327`) for course codes.
+- Do NOT wrap the entire content in a code fence. Write the markdown directly.
+- Do NOT duplicate the structured citations/risks/nextSteps inside the `content` field — those have their own
+  fields. Keep `content` as the prose answer the student will read.
+- If the user explicitly asks for a structured plan, schedule, or data block (for example, a JSON schedule), you
+  MAY include a fenced ```json ... ``` block within the markdown content for that purpose.
+- Prefer short paragraphs. Use lists liberally for course requirements, prerequisites, and step-by-step plans.
 """
+
+
+# JSON Schema for structured output. Order of properties matters — `content` is first so that during
+# streaming we receive its tokens before the metadata fields.
+RESPONSE_SCHEMA = {
+    "name": "advisor_response",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "content": {
+                "type": "string",
+                "description": "GitHub-Flavored Markdown response shown to the student."
+            },
+            "citations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "source": {"type": "string"},
+                        "excerpt": {"type": "string"}
+                    },
+                    "required": ["source", "excerpt"]
+                }
+            },
+            "risks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "type": {"type": "string"},
+                        "severity": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "message": {"type": "string"}
+                    },
+                    "required": ["type", "severity", "message"]
+                }
+            },
+            "nextSteps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "action": {"type": "string"},
+                        "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "deadline": {"type": ["string", "null"]}
+                    },
+                    "required": ["action", "priority", "deadline"]
+                }
+            }
+        },
+        "required": ["content", "citations", "risks", "nextSteps"]
+    }
+}
+
+
+class _StreamingContentExtractor:
+    """
+    Incremental extractor that pulls the value of the `content` field out of
+    a streaming JSON response as raw markdown text.
+
+    Used to convert a stream of structured-output JSON deltas into a stream of
+    visible markdown deltas. Handles JSON string escapes (\\n, \\t, \\", \\\\,
+    \\uXXXX, etc.) so the frontend receives real characters rather than escape
+    sequences.
+    """
+
+    _CONTENT_KEY_RE = re.compile(r'"content"\s*:\s*"')
+
+    def __init__(self):
+        self._buffer = ""
+        self._in_content = False
+        self._content_done = False
+        self._cursor = 0  # position in self._buffer up to which we've already emitted
+
+    @property
+    def content_done(self) -> bool:
+        return self._content_done
+
+    def feed(self, chunk: str) -> str:
+        """Append a chunk to the buffer and return any newly available markdown."""
+        if not chunk:
+            return ""
+        self._buffer += chunk
+        if self._content_done:
+            return ""
+
+        if not self._in_content:
+            match = self._CONTENT_KEY_RE.search(self._buffer)
+            if not match:
+                return ""
+            self._in_content = True
+            self._cursor = match.end()
+
+        out: List[str] = []
+        i = self._cursor
+        buf = self._buffer
+        n = len(buf)
+
+        while i < n:
+            c = buf[i]
+            if c == '\\':
+                # Escape sequence — bail if incomplete so we can resume next chunk.
+                if i + 1 >= n:
+                    break
+                esc = buf[i + 1]
+                if esc == 'u':
+                    if i + 5 >= n:
+                        break
+                    try:
+                        out.append(chr(int(buf[i + 2:i + 6], 16)))
+                    except ValueError:
+                        out.append('?')
+                    i += 6
+                else:
+                    mapping = {
+                        'n': '\n', 't': '\t', 'r': '\r',
+                        '"': '"', '\\': '\\', '/': '/',
+                        'b': '\b', 'f': '\f',
+                    }
+                    out.append(mapping.get(esc, esc))
+                    i += 2
+            elif c == '"':
+                self._content_done = True
+                i += 1
+                break
+            else:
+                out.append(c)
+                i += 1
+
+        self._cursor = i
+        return "".join(out)
+
+    @property
+    def full_buffer(self) -> str:
+        return self._buffer
 
 
 class ChatService:
@@ -549,52 +690,109 @@ class ChatService:
             return ""
 
     def _parse_response(self, response_text: str) -> ChatResponse:
-        """Parse the LLM response into structured format."""
-        # Try to extract JSON from response
+        """
+        Parse the LLM response into a ChatResponse.
+
+        With strict json_schema response_format, the model output is guaranteed valid JSON
+        matching RESPONSE_SCHEMA, so we just json.loads it. We still tolerate occasional
+        legacy/non-conforming output by falling back to raw markdown.
+        """
         try:
-            # Look for JSON block
-            json_match = re.search(r'\{[\s\S]*\}', response_text)
-            if json_match:
-                data = json.loads(json_match.group())
+            data = json.loads(response_text)
+            return self._build_chat_response(data)
+        except (json.JSONDecodeError, TypeError):
+            return ChatResponse(content=response_text)
 
-                citations = [
-                    Citation(
-                        source=c.get("source", ""),
-                        excerpt=c.get("excerpt", ""),
-                        relevance=c.get("relevance", 0.8)
-                    )
-                    for c in data.get("citations", [])
-                ]
+    def _build_chat_response(self, data: Dict[str, Any]) -> ChatResponse:
+        """Convert a parsed structured-output dict into a ChatResponse."""
+        citations = [
+            Citation(
+                source=c.get("source", ""),
+                excerpt=c.get("excerpt", ""),
+                relevance=c.get("relevance", 0.8),
+            )
+            for c in (data.get("citations") or [])
+        ]
+        risks = [
+            RiskFlag(
+                type=r.get("type", "general"),
+                severity=r.get("severity", "low"),
+                message=r.get("message", ""),
+            )
+            for r in (data.get("risks") or [])
+        ]
+        next_steps = [
+            NextStep(
+                action=n.get("action", ""),
+                priority=n.get("priority", "medium"),
+                deadline=n.get("deadline"),
+            )
+            for n in (data.get("nextSteps") or [])
+        ]
+        return ChatResponse(
+            content=data.get("content", ""),
+            citations=citations,
+            risks=risks,
+            nextSteps=next_steps,
+        )
 
-                risks = [
-                    RiskFlag(
-                        type=r.get("type", "general"),
-                        severity=r.get("severity", "low"),
-                        message=r.get("message", "")
-                    )
-                    for r in data.get("risks", [])
-                ]
+    def _build_messages(
+        self,
+        student_id: Optional[str],
+        message: str,
+        chat_history: Optional[List[Dict[str, str]]],
+        user_id: Optional[str],
+        user_role: Optional[str],
+    ) -> List[Dict[str, str]]:
+        """Assemble the OpenAI message list for a chat turn."""
+        # Get relevant context via RAG
+        context = self._get_context(message)
 
-                next_steps = [
-                    NextStep(
-                        action=n.get("action", ""),
-                        priority=n.get("priority", "medium"),
-                        deadline=n.get("deadline")
-                    )
-                    for n in data.get("nextSteps", [])
-                ]
+        # Get user-specific context based on role
+        user_context = ""
+        if user_role == USER_ROLE_ADVISOR or user_role == USER_ROLE_ADMIN:
+            user_context = self._get_advisor_context(user_id, student_id)
+        elif user_role == USER_ROLE_STUDENT:
+            if user_id and user_id == student_id:
+                user_context = self._get_student_context(student_id)
+        else:
+            if student_id:
+                user_context = self._get_student_context(student_id)
 
-                return ChatResponse(
-                    content=data.get("content", response_text),
-                    citations=citations,
-                    risks=risks,
-                    nextSteps=next_steps
-                )
-        except (json.JSONDecodeError, KeyError):
-            pass
+        messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-        # Fallback: return raw text
-        return ChatResponse(content=response_text)
+        if user_role == USER_ROLE_ADVISOR or user_role == USER_ROLE_ADMIN:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "IMPORTANT: The current user is an ADVISOR, not a student. "
+                    "You are helping them manage and advise their students. "
+                    "Address them as an advisor and provide insights about their advisees. "
+                    "Do NOT address them as a student."
+                ),
+            })
+
+        if user_context:
+            messages.append({
+                "role": "system",
+                "content": f"Current user information:\n\n{user_context}",
+            })
+
+        if context:
+            messages.append({
+                "role": "system",
+                "content": f"Relevant context from W&M Business School documents:\n\n{context}",
+            })
+
+        if chat_history:
+            for msg in chat_history[-self.MAX_HISTORY_MESSAGES:]:
+                messages.append({
+                    "role": msg.get("role", "user"),
+                    "content": msg.get("content", ""),
+                })
+
+        messages.append({"role": "user", "content": message})
+        return messages
 
     def chat(
         self,
@@ -605,7 +803,7 @@ class ChatService:
         user_role: str = None
     ) -> ChatResponse:
         """
-        Process a chat message and return a response.
+        Process a chat message and return a response (non-streaming).
 
         Args:
             student_id: The student's ID being queried (for context)
@@ -615,82 +813,94 @@ class ChatService:
             user_role: The authenticated user's role (student/advisor/admin)
 
         Returns:
-            ChatResponse with content, citations, risks, and next steps
+            ChatResponse with markdown content, citations, risks, and next steps
         """
         self._ensure_initialized()
+        messages = self._build_messages(student_id, message, chat_history, user_id, user_role)
 
-        # Get relevant context via RAG
-        context = self._get_context(message)
-
-        # Get user-specific context based on role
-        user_context = ""
-
-        if user_role == USER_ROLE_ADVISOR or user_role == USER_ROLE_ADMIN:
-            # Advisors/admins can see advisee data
-            # If student_id is provided, focus on that student but include advisee list
-            user_context = self._get_advisor_context(user_id, student_id)
-        elif user_role == USER_ROLE_STUDENT:
-            # Students can only see their own data
-            # Ensure they're only querying about themselves
-            if user_id and user_id == student_id:
-                user_context = self._get_student_context(student_id)
-            # If student tries to query another student, don't include any student data
-        else:
-            # No role or unknown role - use student_id if provided (legacy support)
-            if student_id:
-                user_context = self._get_student_context(student_id)
-
-        # Build messages
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-        # Add role-specific instruction so the LLM knows who it's talking to
-        if user_role == USER_ROLE_ADVISOR or user_role == USER_ROLE_ADMIN:
-            messages.append({
-                "role": "system",
-                "content": (
-                    "IMPORTANT: The current user is an ADVISOR, not a student. "
-                    "You are helping them manage and advise their students. "
-                    "Address them as an advisor and provide insights about their advisees. "
-                    "Do NOT address them as a student."
-                )
-            })
-
-        # Add user context as system message
-        if user_context:
-            messages.append({
-                "role": "system",
-                "content": f"Current user information:\n\n{user_context}"
-            })
-
-        # Add curriculum context as system message
-        if context:
-            messages.append({
-                "role": "system",
-                "content": f"Relevant context from W&M Business School documents:\n\n{context}"
-            })
-
-        # Add chat history (limited)
-        if chat_history:
-            for msg in chat_history[-self.MAX_HISTORY_MESSAGES:]:
-                messages.append({
-                    "role": msg.get("role", "user"),
-                    "content": msg.get("content", "")
-                })
-
-        # Add current message
-        messages.append({"role": "user", "content": message})
-
-        # Call OpenAI
         response = self._openai_client.chat.completions.create(
             model=self.MODEL,
             messages=messages,
             temperature=0.7,
-            max_completion_tokens=1000
+            max_completion_tokens=4000,
+            response_format={"type": "json_schema", "json_schema": RESPONSE_SCHEMA},
         )
 
         response_text = response.choices[0].message.content
-
         return self._parse_response(response_text)
+
+    def chat_stream(
+        self,
+        student_id: Optional[str],
+        message: str,
+        chat_history: List[Dict[str, str]] = None,
+        user_id: str = None,
+        user_role: str = None,
+    ) -> Generator[Dict[str, Any], None, None]:
+        """
+        Process a chat message and yield streaming events.
+
+        Yields dicts with shape:
+            {"type": "content_delta", "delta": "...markdown..."}
+            {"type": "metadata", "citations": [...], "risks": [...], "nextSteps": [...]}
+            {"type": "done"}
+            {"type": "error", "message": "..."}
+
+        Uses OpenAI's structured-output streaming. The `content` field of the JSON
+        schema is extracted incrementally and yielded as markdown deltas.
+        """
+        self._ensure_initialized()
+        messages = self._build_messages(student_id, message, chat_history, user_id, user_role)
+
+        extractor = _StreamingContentExtractor()
+        try:
+            stream = self._openai_client.chat.completions.create(
+                model=self.MODEL,
+                messages=messages,
+                temperature=0.7,
+                max_completion_tokens=4000,
+                response_format={"type": "json_schema", "json_schema": RESPONSE_SCHEMA},
+                stream=True,
+            )
+
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta_obj = chunk.choices[0].delta
+                token = getattr(delta_obj, "content", None) or ""
+                if not token:
+                    continue
+                visible = extractor.feed(token)
+                if visible:
+                    yield {"type": "content_delta", "delta": visible}
+
+            # Stream finished — parse the full JSON to extract metadata.
+            try:
+                data = json.loads(extractor.full_buffer)
+                parsed = self._build_chat_response(data)
+            except (json.JSONDecodeError, TypeError):
+                # Strict json_schema should prevent this, but fall back gracefully.
+                parsed = ChatResponse(content=extractor.full_buffer)
+
+            yield {
+                "type": "metadata",
+                "content": parsed.content,
+                "citations": [
+                    {"source": c.source, "excerpt": c.excerpt, "relevance": c.relevance}
+                    for c in parsed.citations
+                ],
+                "risks": [
+                    {"type": r.type, "severity": r.severity, "message": r.message}
+                    for r in parsed.risks
+                ],
+                "nextSteps": [
+                    {"action": n.action, "priority": n.priority, "deadline": n.deadline}
+                    for n in parsed.nextSteps
+                ],
+            }
+            yield {"type": "done"}
+        except Exception as e:
+            yield {"type": "error", "message": str(e)}
 
     def add_policy_document(self, content: str, source: str, metadata: Dict[str, Any] = None):
         """Add a policy document to the knowledge base."""

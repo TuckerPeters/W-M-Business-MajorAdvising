@@ -304,6 +304,27 @@ export const getConversations = async () => {
   }));
 };
 
+/**
+ * Some legacy assistant messages were stored as a JSON blob in the `content`
+ * field (the model used to be told to return JSON, and on truncation the raw
+ * JSON would land in storage). Detect and unwrap those so they render as
+ * markdown rather than raw JSON.
+ */
+function unwrapLegacyJsonContent(raw: any): string {
+  if (typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('{')) return raw;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && typeof parsed.content === 'string') {
+      return parsed.content;
+    }
+  } catch {
+    // not valid JSON — fall through
+  }
+  return raw;
+}
+
 export const getConversationMessages = async (conversationId: string) => {
   const data = await apiRequest<{
     messages: any[];
@@ -312,7 +333,7 @@ export const getConversationMessages = async (conversationId: string) => {
   return (data.messages || []).map((m: any) => ({
     id: m.id,
     role: m.role as 'user' | 'assistant',
-    content: m.content,
+    content: m.role === 'assistant' ? unwrapLegacyJsonContent(m.content) : m.content,
     citations: (m.citations || []).map((c: any) => ({
       title: c.source || 'Source',
       url: '',
@@ -438,4 +459,98 @@ export const sendChatMessage = async (message: string, conversationId?: string |
       studentId: getStudentId(),
       conversationId: conversationId || undefined,
     }),
+  });
+
+export type ChatStreamEvent =
+  | { type: "content_delta"; delta: string }
+  | {
+      type: "metadata";
+      citations: any[];
+      risks: any[];
+      nextSteps: any[];
+      conversationId: string;
+    }
+  | { type: "done" }
+  | { type: "error"; message: string };
+
+/**
+ * Stream a chat message from the backend over Server-Sent Events.
+ *
+ * The backend emits events as `data: <json>\n\n`. We accumulate bytes into a
+ * buffer, split on the SSE delimiter, and parse each JSON payload. The frontend
+ * appends `content_delta.delta` to the visible message as it arrives, then
+ * applies metadata fields when the metadata event fires.
+ */
+export async function sendChatMessageStream(
+  message: string,
+  conversationId: string | null | undefined,
+  onEvent: (event: ChatStreamEvent) => void,
+  options?: {
+    studentIdOverride?: string;
+    extraHeaders?: Record<string, string>;
+    endpoint?: string;
+  },
+): Promise<void> {
+  const token = await getAuthToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options?.extraHeaders || {}),
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const endpoint = options?.endpoint ?? "/chat/message/stream";
+  const res = await fetch(`${BACKEND_URL}/api${endpoint}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      message,
+      studentId: options?.studentIdOverride ?? getStudentId(),
+      conversationId: conversationId || undefined,
+    }),
+  });
+
+  if (!res.ok || !res.body) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(`Stream error ${res.status}: ${errorText || res.statusText}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE messages are separated by a blank line.
+    let sepIdx: number;
+    while ((sepIdx = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, sepIdx);
+      buffer = buffer.slice(sepIdx + 2);
+      // Each event may have multiple lines; the data lines start with "data: ".
+      const dataLines = rawEvent
+        .split("\n")
+        .filter((l) => l.startsWith("data: "))
+        .map((l) => l.slice(6));
+      if (dataLines.length === 0) continue;
+      const payload = dataLines.join("\n");
+      try {
+        const parsed = JSON.parse(payload) as ChatStreamEvent;
+        onEvent(parsed);
+      } catch {
+        // Ignore malformed events.
+      }
+    }
+  }
+}
+
+export const sendAdvisorChatMessageStream = (
+  message: string,
+  conversationId: string | null | undefined,
+  onEvent: (event: ChatStreamEvent) => void,
+) =>
+  sendChatMessageStream(message, conversationId, onEvent, {
+    studentIdOverride: getAdvisorId(),
+    extraHeaders: ADVISOR_HEADERS,
   });

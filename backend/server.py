@@ -20,7 +20,9 @@ from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+import json as _json
 
 from core.config import initialize_firebase, get_firestore_client
 from core.semester import SemesterManager
@@ -1998,6 +2000,143 @@ async def chat_message(
             status_code=503,
             detail=f"Chat service unavailable: {str(e)}"
         )
+
+
+@app.post("/api/chat/message/stream")
+async def chat_message_stream(
+    request: ChatMessageRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """
+    Streaming variant of /api/chat/message.
+
+    Returns Server-Sent Events. Each event is `data: <json>\\n\\n` with a payload of:
+        {"type": "content_delta", "delta": "...markdown text..."}
+        {"type": "metadata", "citations": [...], "risks": [...], "nextSteps": [...], "conversationId": "..."}
+        {"type": "done"}
+        {"type": "error", "message": "..."}
+
+    The frontend should append `delta` chunks to the visible message as they arrive,
+    then attach metadata when the metadata event fires. The conversationId is included
+    in the metadata event so the client can correlate new conversations.
+    """
+    if not verify_user_access(current_user, request.studentId):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    is_advisor_self = current_user.is_advisor and current_user.uid == request.studentId
+    if not is_advisor_self:
+        student = get_student_service().get_student(request.studentId)
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found")
+
+    chat_service = get_chat_service()
+    conversation_service = get_conversation_service()
+    chat_student_id = None if is_advisor_self else request.studentId
+    conversation_id = request.conversationId
+
+    if conversation_id:
+        conversation = conversation_service.get_conversation(conversation_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        if not verify_user_access(current_user, conversation["studentId"]):
+            raise HTTPException(status_code=403, detail="Access denied to conversation")
+        stored_messages = conversation_service.get_messages(conversation_id, limit=20)
+        chat_history = [
+            {"role": m["role"], "content": m["content"]} for m in stored_messages
+        ]
+    else:
+        conversation = conversation_service.create_conversation(
+            user_id=current_user.uid,
+            student_id=request.studentId,
+            user_role=current_user.role.value,
+        )
+        conversation_id = conversation["id"]
+        chat_history = request.chatHistory
+
+    def _sse(payload: dict) -> str:
+        return f"data: {_json.dumps(payload)}\n\n"
+
+    def _persist_question_embedding():
+        try:
+            from google.cloud.firestore_v1.vector import Vector
+            from datetime import datetime as dt
+            emb_service = get_embeddings_service()
+            embedding = emb_service.generate_embedding(request.message)
+            db = get_firestore_client()
+            db.collection("question_embeddings").add({
+                "text": request.message,
+                "embedding": Vector(embedding),
+                "conversationId": conversation_id,
+                "studentId": request.studentId,
+                "createdAt": dt.utcnow().isoformat(),
+            })
+        except Exception:
+            pass
+
+    def event_generator():
+        # FastAPI runs this sync generator in a threadpool, so blocking I/O on the
+        # OpenAI client doesn't stall the asyncio event loop.
+
+        # Persist the user message up-front so it's saved even if the stream errors out.
+        conversation_service.add_message(conversation_id, "user", request.message)
+        _persist_question_embedding()
+
+        full_content = ""
+        final_citations: list = []
+        final_risks: list = []
+        final_next_steps: list = []
+        had_error = False
+
+        try:
+            for event in chat_service.chat_stream(
+                student_id=chat_student_id,
+                message=request.message,
+                chat_history=chat_history,
+                user_id=current_user.uid,
+                user_role=current_user.role.value,
+            ):
+                etype = event.get("type")
+                if etype == "content_delta":
+                    full_content += event.get("delta", "")
+                    yield _sse(event)
+                elif etype == "metadata":
+                    full_content = event.get("content", full_content) or full_content
+                    final_citations = event.get("citations", []) or []
+                    final_risks = event.get("risks", []) or []
+                    final_next_steps = event.get("nextSteps", []) or []
+                    yield _sse({
+                        "type": "metadata",
+                        "citations": final_citations,
+                        "risks": final_risks,
+                        "nextSteps": final_next_steps,
+                        "conversationId": conversation_id,
+                    })
+                elif etype == "error":
+                    had_error = True
+                    yield _sse(event)
+                elif etype == "done":
+                    yield _sse({"type": "done"})
+        except Exception as e:
+            had_error = True
+            yield _sse({"type": "error", "message": str(e)})
+        finally:
+            if full_content and not had_error:
+                conversation_service.add_message(
+                    conversation_id, "assistant", full_content,
+                    citations=final_citations,
+                    risks=final_risks,
+                    next_steps=final_next_steps,
+                )
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # Helpers

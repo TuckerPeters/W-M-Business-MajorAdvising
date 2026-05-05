@@ -19,7 +19,7 @@ import {
   getCommonQuestions,
   getAdvisorAlerts,
   getAdvisorConversations,
-  sendAdvisorChatMessage,
+  sendAdvisorChatMessageStream,
   deleteAdvisorConversation,
   AdvisorAlert,
 } from '@/lib/api-client';
@@ -401,7 +401,7 @@ export default function AdvisorDashboard() {
                 <ChatInterface
                   activeConversationId={activeConversationId}
                   onConversationChange={setActiveConversationId}
-                  sendMessageFn={sendAdvisorChatMessage}
+                  sendMessageStreamFn={sendAdvisorChatMessageStream}
                   listConversationsFn={getAdvisorConversations}
                   deleteConversationFn={deleteAdvisorConversation}
                   quickPrompts={advisorQuickPrompts}

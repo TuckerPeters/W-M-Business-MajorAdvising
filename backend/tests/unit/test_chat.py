@@ -855,8 +855,14 @@ class TestResponseParsing:
         assert len(result.risks) == 1
         assert len(result.nextSteps) == 1
 
-    def test_parse_json_in_markdown(self, service):
-        """Should extract JSON from markdown code blocks"""
+    def test_parse_non_json_falls_back_to_raw(self, service):
+        """If the model output isn't valid JSON, return it verbatim as content.
+
+        With strict json_schema response_format the OpenAI client guarantees
+        pure JSON, so the legacy "extract JSON from a markdown block" path is no
+        longer needed. The fallback now just preserves the raw text instead of
+        silently swallowing it.
+        """
         response_text = '''Here is some text before.
 
 ```json
@@ -872,7 +878,8 @@ And some text after.'''
 
         result = service._parse_response(response_text)
 
-        assert result.content == "The answer"
+        assert result.content == response_text
+        assert result.citations == []
 
     def test_parse_plain_text_fallback(self, service):
         """Should use plain text when no JSON found"""
